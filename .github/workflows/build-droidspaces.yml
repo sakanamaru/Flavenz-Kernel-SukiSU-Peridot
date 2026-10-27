@@ -26,8 +26,9 @@ jobs:
       fail-fast: false
       matrix:
         # guidix-full DIHAPUS 2026-09-13: bootloop on-device (logs/recovery_20260913.log).
-        # ack-full satu-satunya flavor (boot-verified, release Flavenz-20260910).
-        flavor: [ack-full]
+        # kpm-off: SukiSU+SUSFS with KPM disabled (default, safest)
+        # kpm-on : same + CONFIG_KPM=y + SukiSU KPM image patch
+        flavor: [kpm-off, kpm-on]
     permissions:
       contents: write
     env:
@@ -113,7 +114,6 @@ jobs:
           echo "$HOME/clang/bin" >> $GITHUB_PATH
 
       - name: Clone Pure ACK Source + Defconfig
-        if: ${{ matrix.flavor == 'ack-full' }}
         run: |
           # Clone android.googlesource.com sering putus di tengah jalan di runner
           # ("fetch-pack: unexpected disconnect", "early EOF", exit 128) — flaky,
@@ -284,6 +284,9 @@ jobs:
           CONFIG_FILE="arch/arm64/configs/vendor/peridot_GKI.config"
           test -f "$CONFIG_FILE" || { echo "::error::$CONFIG_FILE missing"; exit 1; }
           cat ../configs/sukisu_susfs.config >> "$CONFIG_FILE"
+          if [ "${FLAVOR}" = "kpm-on" ]; then
+            echo "CONFIG_KPM=y" >> "$CONFIG_FILE"
+          fi
           grep -q '^CONFIG_KSU=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU not staged"; exit 1; }
           grep -q '^CONFIG_KSU_SUSFS=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU_SUSFS not staged"; exit 1; }
           echo "SukiSU hooks + kernel config applied"
@@ -330,6 +333,10 @@ jobs:
             || { echo "::error::CONFIG_KSU tidak aktif di .config"; exit 1; }
           grep -q '^CONFIG_KSU_SUSFS=y' out/.config \
             || { echo "::error::CONFIG_KSU_SUSFS tidak aktif di .config"; exit 1; }
+          if [ "${FLAVOR}" = "kpm-on" ]; then
+            grep -q '^CONFIG_KPM=y' out/.config \
+              || { echo "::error::CONFIG_KPM tidak aktif di .config (kpm-on)"; exit 1; }
+          fi
           grep -q '^CONFIG_MACVLAN=y' out/.config \
             || { echo "::error::CONFIG_MACVLAN tidak aktif di .config"; exit 1; }
           grep -q '^CONFIG_IP6_NF_NAT=y' out/.config \
@@ -342,6 +349,21 @@ jobs:
           fi
           echo "Gate kABI & Features OK: KSU+SUSFS+MACVLAN+IP6_NAT aktif, CFS_BANDWIDTH/PIDS nonaktif"
 
+      - name: Patch KPM into kernel Image (kpm-on only)
+        if: ${{ matrix.flavor == 'kpm-on' }}
+        run: |
+          set -euo pipefail
+          mkdir -p kpm-patch
+          cp kernel/out/arch/arm64/boot/Image kpm-patch/Image
+          cd kpm-patch
+          curl -fL --retry 3 -o patch "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/1aaf4283e03b0a2861bf8db1e58624028db23a85/kpm/patch_linux"
+          chmod +x patch
+          ./patch
+          test -f oImage || { echo "::error::KPM image patch failed (no oImage)"; exit 1; }
+          cp oImage ../kernel/out/arch/arm64/boot/Image
+          cd ..
+          echo "KPM patched Image size: $(stat -c%s kernel/out/arch/arm64/boot/Image) bytes"
+
       - name: Package AnyKernel3
         run: |
           DATE=$(date +%Y%m%d)
@@ -349,11 +371,17 @@ jobs:
           # oleh step BERIKUTNYA, jadi sebelumnya ${ZIPPATH} kosong di step ini:
           # `zip -r9 "" ...` exit 0 dan menulis file tersembunyi `.zip`, step
           # tampak sukses, tapi tidak ada zip yang di-upload.
-          if [ "${FLAVOR}" = "ack-full" ]; then
-            ZIPNAME="Peridot-Kernel-ACK-SukiSU-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
-          else
-            echo "::error::Unknown FLAVOR '${FLAVOR}'"; exit 1
-          fi
+          case "${FLAVOR}" in
+            kpm-off)
+              ZIPNAME="Peridot-Kernel-ACK-SukiSU-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
+              ;;
+            kpm-on)
+              ZIPNAME="Peridot-Kernel-ACK-SukiSU-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-KPM-droidspaces-${DATE}.zip"
+              ;;
+            *)
+              echo "::error::Unknown FLAVOR '${FLAVOR}'"; exit 1
+              ;;
+          esac
           ZIPPATH="${GITHUB_WORKSPACE}/${ZIPNAME}"
 
           echo "ZIPNAME=${ZIPNAME}" >> $GITHUB_ENV
@@ -378,7 +406,7 @@ jobs:
             '## AnyKernel setup' \
             '# begin properties' \
             "properties() { '" \
-            "kernel.string=Flavenz Kernel (${FLAVOR}) by ZxAlif-ID" \
+            "kernel.string=SukiSU+SUSFS Kernel (${FLAVOR}) by sakanamaru / Flavenz" \
             'do.devicecheck=1' \
             'do.modules=0' \
             'do.systemless=1' \
@@ -404,7 +432,7 @@ jobs:
             'ui_print "|   by ZxAlif-ID   //  ACK 6.1  //  SM8635     |";' \
             'ui_print "|                                                |";' \
             'ui_print "+================================================+";' \
-            "ui_print \"|   KSU  : ${SUKISU_VERSION}   SUSFS : ${SUSFS_VERSION}   Droidspaces   |\";" \
+            "ui_print \"|  KSU:${SUKISU_VERSION}  SUSFS:${SUSFS_VERSION}  ${FLAVOR}  |\";" \
             'ui_print "+================================================+";' \
             'ui_print " ";' \
             'split_boot;' \
@@ -478,8 +506,8 @@ jobs:
           echo "=== zip flashable di artifacts/ ==="
           ls -lh artifacts/
           COUNT=$(find artifacts -maxdepth 1 -name 'Peridot-Kernel-*.zip' | wc -l)
-          if [ "${COUNT}" -ne 1 ]; then
-            echo "::error::expected exactly 1 flashable zip, found ${COUNT}"; exit 1
+          if [ "${COUNT}" -ne 2 ]; then
+            echo "::error::expected exactly 2 flashable zips (kpm-off, kpm-on), found ${COUNT}"; exit 1
           fi
           cd artifacts
           # checksum untuk verifikasi integritas sebelum flash
@@ -489,13 +517,14 @@ jobs:
           echo "REL_TAG=Flavenz-${DATE}" >> "$GITHUB_ENV"
           {
             echo "REL_BODY<<RELEASE_EOF"
-            echo "## Flavenz Kernel for POCO F6 (Peridot) — build ${DATE}"
+            echo "## SukiSU+SUSFS Kernel for POCO F6 / Redmi Turbo 3 (peridot) — build ${DATE}"
             echo ""
-            echo "Satu zip flashable AnyKernel3 (ack-full):"
+            echo "Dua zip flashable AnyKernel3:"
             echo ""
-            echo "| Flavor | Base |"
-            echo "|---|---|"
-            echo "| \`ack-full\` | ACK android14-6.1 @ \`0c3d559bcd85\` + defconfig Mohithash |"
+            echo "| Flavor | KPM | Base |"
+            echo "|---|---|---|"
+            echo "| \`kpm-off\` | disabled | ACK android14-6.1 @ \`0c3d559bcd85\` + peridot defconfig |"
+            echo "| \`kpm-on\` | enabled (CONFIG_KPM=y + image patch) | same |"
             echo ""
             echo "### Isi (tanpa zip dalam zip — langsung flashable)"
             echo "- \`${SUKISU_VER}\` SukiSU-Ultra builtin (pinned 0b666ca) + SUSFS v2.3.0"
