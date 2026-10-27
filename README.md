@@ -11,6 +11,8 @@
 
 **在 [Flavenz-Kernel-Peridot](https://github.com/ZxAlif-ID/Flavenz-Kernel-Peridot) 基础上改造：把 KernelSU Next 换成 SukiSU-Ultra，保留 ACK 6.1.138 / peridot defconfig / SUSFS，并实测可在移植的 OS4（Android 17）上正常使用。**
 
+**🌐 语言: 中文 | [English](README.en.md)**
+
 </div>
 
 ---
@@ -27,7 +29,7 @@
 | 隐藏 | **SUSFS v2.3.0**（`ShirkNeko/susfs4ksu` 的 `gki-android14-6.1` 补丁，重基准到 ACK `0c3d559`） |
 | 编译 | Neutron Clang 30062026、ThinLTO、GitHub Actions |
 | 额外配置 | 保留 Flavenz 的 droidspaces 容器相关 kABI-safe 配置（SYSVIPC / 命名空间 / MACVLAN / IPv6 NAT 等） |
-| KPM | **默认未开启**（`CONFIG_KPM` 关闭）；需要的话自行打开并打 KPM image patch |
+| KPM | 提供两个 flavor：`kpm-off`（默认关闭）/ `kpm-on`（`CONFIG_KPM=y` + KPM image patch，见下） |
 
 和上游 Flavenz 的差异：
 
@@ -36,6 +38,15 @@
 - 构建时对 SukiSU 代码关闭 `-Werror`（`-Wno-error`），否则 Clang 会因 `-Wimplicit-fallthrough` 直接失败
 - KPM 关闭（降低首次构建/开机风险，SUSFS 不需要 KPM）
 - 在**移植 OS4（Android 17）** 上实测开机、root、SUSFS 均正常（见下）
+
+## 两个 Flavor
+
+| Flavor | KPM | 说明 |
+|---|---|---|
+| `kpm-off` | 关闭 | 默认、最稳；SUSFS 完整可用 |
+| `kpm-on` | 开启 | 额外 `CONFIG_KPM=y` + SukiSU KPM image patch（`patch_linux`）；需要 KPM 模块时使用 |
+
+每个 Release 同时包含这两个 AnyKernel3 zip 和 `SHA256SUMS.txt`。
 
 ---
 
@@ -58,7 +69,7 @@
 ## 下载
 
 - Releases：<https://github.com/sakanamaru/Flavenz-Kernel-SukiSU-Peridot/releases>
-- 每个 Release 包含可直接刷写的 AnyKernel3 zip 和 `SHA256SUMS.txt`
+- 每个 Release 包含两个可直接刷写的 AnyKernel3 zip（`kpm-off` / `kpm-on`）和 `SHA256SUMS.txt`
 
 前置条件：**Bootloader 已解锁**；刷入前备份当前 `boot` / `init_boot` 分区。
 
@@ -125,13 +136,13 @@ fastboot reboot
 | SukiSU 隐藏 hooks | `patches/sukisu/69_hide_stuff.patch` |
 | KSU/SUSFS 内核配置 | `configs/sukisu_susfs.config` |
 | peridot defconfig | workflow 中从 `Mohithash/kernel_xiaomi_sm8635` 拷贝 |
-| KPM | 在 `configs/sukisu_susfs.config` 加 `CONFIG_KPM=y`，并自行处理 KPM image patch |
+| KPM | 选择 workflow 的 `kpm-on` flavor；配置在 `configs/sukisu_susfs.config`，镜像 patch 由 workflow 自动完成 |
 
 ---
 
 ## 已知限制
 
-- **KPM 未启用**：SUSFS / 隐藏不受影响；需要 KPM 的模块请自行重编。
+- **KPM**：`kpm-off` 关闭（默认），`kpm-on` 开启；SUSFS / 隐藏两个 flavor 都有。
 - SUSFS 能隐藏路径/挂载，但**不能隐藏管理器包名**；需要配合 HMA（Hide My Applist）等对目标 App 隐藏包名。
 - LSPosed 注入可能被部分检测 App 识别（如 ApplistDetector 的 "Xposed Modules"）；这是 Zygisk/Xposed 生态的固有问题，与内核无关。
 - 移植 ROM 的 GMS / Play Integrity 表现取决于 ROM 自身，不保证通过 Play Integrity。
@@ -160,4 +171,4 @@ GPL-2.0（见 [LICENSE](LICENSE)）。内核源码版权归各上游项目所有
 
 ## English summary
 
-Custom GKI kernel for **Redmi Turbo 3 / POCO F6 (`peridot`)** based on ACK `android14-6.1-lts` @ `0c3d559` (6.1.138), with **SukiSU-Ultra builtin (`0b666ca`)** and **SUSFS v2.3.0** compiled in. Built with GitHub Actions + Neutron Clang; peridot defconfig from `Mohithash/kernel_xiaomi_sm8635`. Tested on a ported Android 17 (OS4) ROM: boots, root works, SUSFS reports `builtin`, and hardware (Wi-Fi/camera/charging) is functional. Flash via AnyKernel3 in a custom recovery, or repack the provided `Image` into your stock `boot.img` and use fastboot (keep `init_boot` stock). Use at your own risk; back up `boot`/`init_boot` first.
+Custom GKI kernel for **Redmi Turbo 3 / POCO F6 (`peridot`)** based on ACK `android14-6.1-lts` @ `0c3d559` (6.1.138), with **SukiSU-Ultra builtin (`0b666ca`)** and **SUSFS v2.3.0** compiled in. Two flavors are published: `kpm-off` (default) and `kpm-on` (`CONFIG_KPM=y` + KPM image patch). Built with GitHub Actions + Neutron Clang; peridot defconfig from `Mohithash/kernel_xiaomi_sm8635`. Tested on a ported Android 17 (OS4) ROM: boots, root works, SUSFS reports `builtin`, and hardware (Wi-Fi/camera/charging) is functional. Flash via AnyKernel3 in a custom recovery, or repack the provided `Image` into your stock `boot.img` and use fastboot (keep `init_boot` stock). Use at your own risk; back up `boot`/`init_boot` first. See [README.en.md](README.en.md) for the full English documentation.
