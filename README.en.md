@@ -27,23 +27,14 @@ A custom GKI kernel for the **Redmi Turbo 3 / POCO F6 (`peridot`, Snapdragon 8s 
 | Hiding | **SUSFS v2.3.0** (`gki-android14-6.1` patch from `ShirkNeko/susfs4ksu`, rebased onto ACK `0c3d559`) |
 | Toolchain | Neutron Clang 30062026, ThinLTO, GitHub Actions |
 | Extra | Flavenz's Droidspaces container-related kABI-safe configs kept (SYSVIPC / namespaces / MACVLAN / IPv6 NAT, etc.) |
-| KPM | Two flavors: `kpm-off` (default) and `kpm-on` (see below) |
-
-## Build flavors
-
-| Flavor | KPM | Notes |
-|---|---|---|
-| `kpm-off` | disabled | Default, safest. Boot-verified on device. |
-| `kpm-on` | enabled | Adds `CONFIG_KPM=y` and applies the SukiSU KPM image patch (`patch_linux`). **Experimental**: the build succeeds, but on 2026-10-28 a `fastboot boot` test on peridot + ported OS4 did not start; back up and test before use. |
-
-Each release contains both AnyKernel3 zips + `SHA256SUMS.txt`.
+| KPM | Not enabled — KernelPatch-patched images failed to boot on this device (see Known limitations) |
 
 ### Differences from upstream Flavenz
 
 - KernelSU Next → **SukiSU-Ultra builtin** (use the SukiSU manager 41095+; the KSU Next manager is not compatible)
 - SUSFS patch switched to ShirkNeko's SukiSU-compatible patch set, plus SukiSU hide hooks (`patches/sukisu/69_hide_stuff.patch`)
 - `-Werror` disabled for SukiSU builtin code (`-Wno-error`), otherwise Clang fails on `-Wimplicit-fallthrough`
-- KPM split into two build flavors
+- KPM not enabled (KernelPatch-patched images failed to boot on this device)
 - Verified booting/rooting/SUSFS on a **ported OS4 (Android 17)** ROM
 
 ---
@@ -67,7 +58,7 @@ Each release contains both AnyKernel3 zips + `SHA256SUMS.txt`.
 ## Download
 
 - Releases: <https://github.com/sakanamaru/Flavenz-Kernel-SukiSU-Peridot/releases>
-- Each release contains two flashable AnyKernel3 zips (`kpm-off`, `kpm-on`) and `SHA256SUMS.txt`
+- Each release contains a flashable AnyKernel3 zip and `SHA256SUMS.txt`
 
 Requirement: **unlocked bootloader**. Back up your current `boot` / `init_boot` partitions before flashing.
 
@@ -77,7 +68,7 @@ Requirement: **unlocked bootloader**. Back up your current `boot` / `init_boot` 
 
 ### Option A: Custom recovery (TWRP / OrangeFox / NEBULA)
 
-1. Download the AnyKernel3 zip for the flavor you want.
+1. Download the AnyKernel3 zip.
 2. Boot into your custom recovery.
 3. (Recommended) Back up `boot` and `init_boot`.
 4. Flash the zip → optionally wipe Dalvik/Cache → reboot.
@@ -123,7 +114,7 @@ If you only touched `boot`/`init_boot`, Fastboot recovery is usually enough. Do 
 1. Fork this repository.
 2. Actions → **Build Kernel - Peridot (SukiSU+SUSFS)** → Run workflow.
 3. Set `rom_build_date` to your ROM's `ro.build.date` (or epoch / `ro.build.date.utc`) so the kernel build timestamp matches your ROM; leave the default if unsure.
-4. Artifacts are uploaded to the workflow run and (on success) published as a GitHub Release with both flavors.
+4. Artifacts are uploaded to the workflow run and (on success) published as a GitHub Release.
 
 Customization points:
 
@@ -134,13 +125,13 @@ Customization points:
 | SukiSU hide hooks | `patches/sukisu/69_hide_stuff.patch` |
 | KSU/SUSFS kernel config | `configs/sukisu_susfs.config` |
 | peridot defconfig source | cloned from `Mohithash/kernel_xiaomi_sm8635` in the workflow |
-| KPM patch binary | pinned `SukiSU_patch/kpm/patch_linux` (only used by `kpm-on`) |
+| KPM | not provided (KernelPatch-incompatible on this device) |
 
 ---
 
 ## Known limitations
 
-- `kpm-off` has KPM disabled (SUSFS/hiding unaffected) and is boot-verified; `kpm-on` enables it but is **not yet boot-verified on device** (treat it as experimental).
+- KPM is **not enabled**: KernelPatch-patched images (raw `Image`, boot image, and a patched stock kernel) all failed to boot on this device (peridot + ported OS4), so no KPM flavor is published. SUSFS/hiding is unaffected.
 - SUSFS hides paths/mounts but **cannot hide the manager package name**; pair it with HMA (Hide My Applist) etc. to hide packages from target apps.
 - LSPosed/Zygisk injection can be detected by some checker apps (e.g. ApplistDetector's "Xposed Modules"); this is inherent to the Xposed ecosystem, not the kernel.
 - Play Integrity / GMS behavior depends on the ROM itself; no guarantee of passing Play Integrity on ported ROMs.
