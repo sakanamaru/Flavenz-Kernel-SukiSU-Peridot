@@ -43,8 +43,8 @@
 
 | Flavor | KPM | 说明 |
 |---|---|---|
-| `kpm-off` | 关闭 | 默认、最稳；SUSFS 完整可用 |
-| `kpm-on` | 开启 | 额外 `CONFIG_KPM=y` + SukiSU KPM image patch（`patch_linux`）；需要 KPM 模块时使用 |
+| `kpm-off` | 关闭 | 默认、最稳；已实测开机 |
+| `kpm-on` | 开启 | 额外 `CONFIG_KPM=y` + SukiSU KPM image patch（`patch_linux`）；**实验性**：构建成功，但 2026-10-28 在 peridot + 移植 OS4 上 `fastboot boot` 未成功启动，使用前务必备份并先测试 |
 
 每个 Release 同时包含这两个 AnyKernel3 zip 和 `SHA256SUMS.txt`。
 
@@ -142,7 +142,7 @@ fastboot reboot
 
 ## 已知限制
 
-- **KPM**：`kpm-off` 关闭（默认），`kpm-on` 开启；SUSFS / 隐藏两个 flavor 都有。
+- **KPM**：`kpm-off` 关闭（默认，已验证开机）；`kpm-on` 开启但**尚未真机验证启动**，当作实验性 flavor 看待。SUSFS / 隐藏两个 flavor 都有。
 - SUSFS 能隐藏路径/挂载，但**不能隐藏管理器包名**；需要配合 HMA（Hide My Applist）等对目标 App 隐藏包名。
 - LSPosed 注入可能被部分检测 App 识别（如 ApplistDetector 的 "Xposed Modules"）；这是 Zygisk/Xposed 生态的固有问题，与内核无关。
 - 移植 ROM 的 GMS / Play Integrity 表现取决于 ROM 自身，不保证通过 Play Integrity。

@@ -33,8 +33,8 @@ A custom GKI kernel for the **Redmi Turbo 3 / POCO F6 (`peridot`, Snapdragon 8s 
 
 | Flavor | KPM | Notes |
 |---|---|---|
-| `kpm-off` | disabled | Default, safest. SUSFS works fully. |
-| `kpm-on` | enabled | Adds `CONFIG_KPM=y` and applies the SukiSU KPM image patch (`patch_linux`) to the built `Image`. Use this if you need KPM modules. |
+| `kpm-off` | disabled | Default, safest. Boot-verified on device. |
+| `kpm-on` | enabled | Adds `CONFIG_KPM=y` and applies the SukiSU KPM image patch (`patch_linux`). **Experimental**: the build succeeds, but on 2026-10-28 a `fastboot boot` test on peridot + ported OS4 did not start; back up and test before use. |
 
 Each release contains both AnyKernel3 zips + `SHA256SUMS.txt`.
 
@@ -140,7 +140,7 @@ Customization points:
 
 ## Known limitations
 
-- `kpm-off` has KPM disabled (SUSFS/hiding unaffected); `kpm-on` enables it at the cost of extra image patching.
+- `kpm-off` has KPM disabled (SUSFS/hiding unaffected) and is boot-verified; `kpm-on` enables it but is **not yet boot-verified on device** (treat it as experimental).
 - SUSFS hides paths/mounts but **cannot hide the manager package name**; pair it with HMA (Hide My Applist) etc. to hide packages from target apps.
 - LSPosed/Zygisk injection can be detected by some checker apps (e.g. ApplistDetector's "Xposed Modules"); this is inherent to the Xposed ecosystem, not the kernel.
 - Play Integrity / GMS behavior depends on the ROM itself; no guarantee of passing Play Integrity on ported ROMs.
