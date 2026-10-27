@@ -1,4 +1,4 @@
-name: Build Kernel - Peridot (ACK)
+name: Build Kernel - Peridot (SukiSU+SUSFS)
 
 on:
   workflow_dispatch:
@@ -33,23 +33,14 @@ jobs:
     env:
       ARCH: arm64
       KERNEL_COMMIT: 0c3d559bcd85
-      # KSU dev-susfs pin (HEAD 2026-10-17): punya ksu_handle_post_execveat_sucompat
-      # + ksu_install_su_fd yang dibutuhkan patch SUSFS ter-rebase.
-      # Update 2026-10-17: dev-susfs HEAD f8ab5e817f9f — SUSFS LKM dead man's switch,
-      # open_redirect scheme 4, sus_path stat/dirent post-checks.
-      KERNELSU_VERSION: f8ab5e81
-      KERNELSU_COMMIT: f8ab5e817f9f6149c55d601438e6975b6f9d488a
-      # Label = versi nyata di pin susfs4ksu 05f2019 (v2.3.0 sejak 2026-08-30;
-      # label lama v2.1.0 = mislabel murni, susfs core tak pernah ter-compile).
+      # SukiSU-Ultra builtin branch, pinned (latest as of 2026-10-27)
+      SUKISU_COMMIT: 0b666cad90f3a13cb4085f8c88e5144594e82030
+      SUKISU_VERSION: 0b666ca
+      # SUSFS v2.3.0 (ShirkNeko/susfs4ksu gki-android14-6.1, rebased to ACK 0c3d559)
       SUSFS_VERSION: v2.3.0
       FLAVOR: ${{ matrix.flavor }}
-      # Duck Detector Build Time Drift & Mismatch Fix
-      # KBUILD_BUILD_TIMESTAMP TIDAK di-pin hardcode lagi — dihitung dinamis di
-      # step "Compute ROM-synced build timestamp" dari input rom_build_date,
-      # supaya tanggal build di uname -a selalu match ro.build.date ROM yang
-      # sedang terpasang (tidak drift lagi saat ROM di-update).
       KBUILD_BUILD_USER: "builder"
-      KBUILD_BUILD_HOST: "droidspaces-ci"
+      KBUILD_BUILD_HOST: "sukisu-peridot-ci"
 
     steps:
       - name: Free disk space
@@ -259,36 +250,43 @@ jobs:
           [ -s kernel.afdo ] || { echo "::error::profil AutoFDO kosong"; exit 1; }
           ls -lh kernel.afdo
 
-      - name: Setup KernelSU Next (pershoot/dev-susfs, pin commit)
-        run: |
-          cd kernel
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/${KERNELSU_COMMIT}/kernel/setup.sh" \
-            | bash -s $KERNELSU_COMMIT
-          cd KernelSU-Next
-          git fetch origin dev-susfs
-          if git checkout "$KERNELSU_COMMIT" 2>/dev/null; then
-            echo "Checked out pinned commit: $KERNELSU_COMMIT"
-          else
-            echo "Pinned commit not found, falling back to origin/dev-susfs HEAD"
-            git checkout origin/dev-susfs
-          fi
-          cd ..
-          grep -q "config KSU_SUSFS" drivers/kernelsu/Kconfig || { echo "::error::KernelSU-Next missing SUSFS config"; exit 1; }
-
-      - name: Setup SUSFS (vendored pin 05f2019, rebased ACK 0c3d559)
+      - name: Setup SukiSU-Ultra (builtin branch, pinned commit)
         run: |
           set -euo pipefail
-          # Vendored + pin: clone HEAD branch = moving target (susfs.c berubah
-          # 12 Sep tanpa perubahan output -> kontradiksi identity check 13 Sep).
-          # Patch ter-rebase WAJIB apply bersih vs ACK 0c3d559 — apply gagal =
-          # build gagal (tidak ada lagi || echo penelan; FAKTA: patch lama tidak
-          # pernah apply -> SUSFS core 0 string di SEMUA build terbit).
-          cp patches/susfs/fs/susfs.c kernel/fs/
-          cp patches/susfs/include/linux/susfs*.h kernel/include/linux/
           cd kernel
-          git apply --check ../patches/susfs/50_add_susfs_in_gki-android14-6.1-ack-0c3d559.patch
-          git apply ../patches/susfs/50_add_susfs_in_gki-android14-6.1-ack-0c3d559.patch
-          grep -q "CONFIG_KSU_SUSFS" fs/Makefile || { echo "::error::SUSFS Makefile hunk tidak masuk"; exit 1; }
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${SUKISU_COMMIT}/kernel/setup.sh" | bash -s builtin
+          test -d KernelSU || { echo "::error::SukiSU clone failed"; exit 1; }
+          cd KernelSU
+          git checkout "${SUKISU_COMMIT}"
+          cd ..
+          test -e drivers/kernelsu/Kconfig || { echo "::error::drivers/kernelsu/Kconfig missing"; exit 1; }
+          grep -q "config KSU_SUSFS" drivers/kernelsu/Kconfig || { echo "::error::SukiSU SUSFS Kconfig missing (wrong branch?)"; exit 1; }
+          echo "SukiSU-Ultra builtin branch ready: ${SUKISU_COMMIT}"
+
+      - name: Setup SUSFS v2.3.0 (rebased to ACK 0c3d559)
+        run: |
+          set -euo pipefail
+          cp patches/susfs/fs/susfs.c kernel/fs/
+          cp patches/susfs/include/linux/susfs.h kernel/include/linux/
+          cp patches/susfs/include/linux/susfs_def.h kernel/include/linux/
+          cd kernel
+          patch -p1 --fuzz=3 --no-backup-if-mismatch < ../patches/susfs/50_add_susfs_in_gki-android14-6.1-ack-0c3d559.patch
+          test -f fs/susfs.c || { echo "::error::fs/susfs.c missing"; exit 1; }
+          grep -q "CONFIG_KSU_SUSFS" fs/Makefile || { echo "::error::SUSFS fs/Makefile hunk missing"; exit 1; }
+          echo "SUSFS core patched"
+
+      - name: Apply SukiSU hide hooks and ACK 6.1 compatibility fixes
+        run: |
+          set -euo pipefail
+          cd kernel
+          patch -p1 -F 3 --no-backup-if-mismatch < ../patches/sukisu/69_hide_stuff.patch
+          python3 ../scripts/ci/fix_task_mmu.py fs/proc/task_mmu.c
+          CONFIG_FILE="arch/arm64/configs/vendor/peridot_GKI.config"
+          test -f "$CONFIG_FILE" || { echo "::error::$CONFIG_FILE missing"; exit 1; }
+          cat ../configs/sukisu_susfs.config >> "$CONFIG_FILE"
+          grep -q '^CONFIG_KSU=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU not staged"; exit 1; }
+          grep -q '^CONFIG_KSU_SUSFS=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU_SUSFS not staged"; exit 1; }
+          echo "SukiSU hooks + kernel config applied"
 
       - name: Build kernel
         run: |
@@ -352,7 +350,7 @@ jobs:
           # `zip -r9 "" ...` exit 0 dan menulis file tersembunyi `.zip`, step
           # tampak sukses, tapi tidak ada zip yang di-upload.
           if [ "${FLAVOR}" = "ack-full" ]; then
-            ZIPNAME="Peridot-Kernel-ACK-KSUNext-${KERNELSU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
+            ZIPNAME="Peridot-Kernel-ACK-SukiSU-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
           else
             echo "::error::Unknown FLAVOR '${FLAVOR}'"; exit 1
           fi
@@ -406,7 +404,7 @@ jobs:
             'ui_print "|   by ZxAlif-ID   //  ACK 6.1  //  SM8635     |";' \
             'ui_print "|                                                |";' \
             'ui_print "+================================================+";' \
-            "ui_print \"|   KSU  : ${KERNELSU_VERSION}   SUSFS : ${SUSFS_VERSION}   Droidspaces   |\";" \
+            "ui_print \"|   KSU  : ${SUKISU_VERSION}   SUSFS : ${SUSFS_VERSION}   Droidspaces   |\";" \
             'ui_print "+================================================+";' \
             'ui_print " ";' \
             'split_boot;' \
@@ -429,7 +427,7 @@ jobs:
       - name: Upload Kernel Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Peridot-Kernel-${{ matrix.flavor }}-KSUNext-${{ env.RELEASEDATE || 'release' }}
+          name: Peridot-Kernel-${{ matrix.flavor }}-SukiSU-${{ env.RELEASEDATE || 'release' }}
           path: Peridot-Kernel-*.zip
           if-no-files-found: error
 
@@ -451,7 +449,7 @@ jobs:
 
       - name: Verify zips & prepare release body
         env:
-          KSU_VER: f8ab5e81
+          SUKISU_VER: 0b666ca
           SUSFS_VER: v2.3.0
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -500,7 +498,7 @@ jobs:
             echo "| \`ack-full\` | ACK android14-6.1 @ \`0c3d559bcd85\` + defconfig Mohithash |"
             echo ""
             echo "### Isi (tanpa zip dalam zip — langsung flashable)"
-            echo "- \`${KSU_VER}\` KernelSU Next (pershoot dev-susfs 2026-10-16: SUSFS LKM dead man's switch, open_redirect scheme 4)"
+            echo "- \`${SUKISU_VER}\` SukiSU-Ultra builtin (pinned 0b666ca) + SUSFS v2.3.0"
             echo "- SUSFS \`${SUSFS_VER}\`"
             echo "- Droidspaces kABI-safe support (MACVLAN, IPv6 NAT, Namespaces, SYSVIPC, memcg)"
             echo "- \`SHA256SUMS.txt\` tersedia untuk verifikasi integritas"
