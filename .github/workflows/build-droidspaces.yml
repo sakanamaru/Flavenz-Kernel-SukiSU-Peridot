@@ -306,7 +306,7 @@ jobs:
             OBJCOPY=$CLANG_BIN/llvm-objcopy
             OBJDUMP=$CLANG_BIN/llvm-objdump
             STRIP=$CLANG_BIN/llvm-strip
-            KCFLAGS="-Wno-default-const-init-var-unsafe -march=armv9.2-a+crypto+dotprod"
+            KCFLAGS="-Wno-default-const-init-var-unsafe -Wno-error -Wno-implicit-fallthrough -march=armv9.2-a+crypto+dotprod"
           )
 
           # Tahap 2: profil AutoFDO (hanya ada jika operator mengisi
