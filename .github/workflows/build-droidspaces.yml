@@ -275,6 +275,19 @@ jobs:
           grep -q "CONFIG_KSU_SUSFS" fs/Makefile || { echo "::error::SUSFS fs/Makefile hunk missing"; exit 1; }
           echo "SUSFS core patched"
 
+      - name: Add SUSFS priority uid Kconfig option
+        run: |
+          set -euo pipefail
+          cd kernel
+          if ! grep -q 'config KSU_SUSFS_PRIORITY_UID_FILTER' drivers/kernelsu/Kconfig; then
+            cat >> drivers/kernelsu/Kconfig <<'EOF'
+config KSU_SUSFS_PRIORITY_UID_FILTER
+	bool "SUSFS getpriority uid bitmap filter"
+	depends on KSU_SUSFS
+	default y
+EOF
+          fi
+          grep -A3 'config KSU_SUSFS_PRIORITY_UID_FILTER' drivers/kernelsu/Kconfig
       - name: Apply SukiSU hide hooks and ACK 6.1 compatibility fixes
         run: |
           set -euo pipefail
