@@ -33,10 +33,10 @@ jobs:
     env:
       ARCH: arm64
       KERNEL_COMMIT: 0c3d559bcd85
-      # SukiSU-Ultra builtin branch, pinned to builtin HEAD 1cfa573 (2026-11-01)
-      # NOTE: main-branch tags (e.g. v4.3.0-r2) have no KSU_SUSFS Kconfig - must use builtin branch commits
-      SUKISU_COMMIT: 1cfa57340590971cba7521ed536da8ebbedc5f0a
-      SUKISU_VERSION: builtin-1cfa573
+      # SukiSU-Ultra builtin branch, pinned to b16e899 (2026-10-30)
+      # NOTE: 464f920+ needs newer SUSFS APIs (susfs_add_sus_type); b16e899 still matches SUSFS v2.3.0
+      SUKISU_COMMIT: b16e899a555e9b96aa1225f049cd7274820ca5b8
+      SUKISU_VERSION: builtin-b16e899
       # SUSFS v2.3.0 (ShirkNeko/susfs4ksu gki-android14-6.1, rebased to ACK 0c3d559)
       SUSFS_VERSION: v2.3.0
       FLAVOR: ${{ matrix.flavor }}
@@ -450,7 +450,7 @@ jobs:
 
       - name: Verify zips & prepare release body
         env:
-          SUKISU_VER: builtin-1cfa573
+          SUKISU_VER: builtin-b16e899
           SUSFS_VER: v2.3.0
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -499,7 +499,7 @@ jobs:
             echo "| \`ack-full\` | ACK android14-6.1 @ \`0c3d559bcd85\` + defconfig Mohithash |"
             echo ""
             echo "### Isi (tanpa zip dalam zip — langsung flashable)"
-            echo "- \`${SUKISU_VER}\` SukiSU-Ultra builtin (pinned 1cfa573, builtin branch) + SUSFS v2.3.0"
+            echo "- \`${SUKISU_VER}\` SukiSU-Ultra builtin (pinned b16e899, builtin branch) + SUSFS v2.3.0"
             echo "- SUSFS \`${SUSFS_VER}\`"
             echo "- Droidspaces kABI-safe support (MACVLAN, IPv6 NAT, Namespaces, SYSVIPC, memcg)"
             echo "- \`SHA256SUMS.txt\` tersedia untuk verifikasi integritas"
