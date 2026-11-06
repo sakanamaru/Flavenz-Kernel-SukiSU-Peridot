@@ -295,7 +295,9 @@ jobs:
           for f in drivers/kernelsu/manager/pkg_observer.c drivers/kernelsu/supercall/dispatch.c; do
             grep -q '#include <linux/susfs.h>' "$f" || sed -i '1i #include <linux/susfs.h>' "$f"
           done
-          echo "SUSFS header include ensured"
+          sed -i '1i extern void susfs_parse_priority_app_strings(void);' drivers/kernelsu/manager/pkg_observer.c
+          sed -i '1i extern void susfs_set_priority_uid_filter(void __user **user_info);' drivers/kernelsu/supercall/dispatch.c
+          echo "SUSFS header/extern ensured"
       - name: Build kernel
         run: |
           export PATH="$HOME/clang/bin:$PATH"
