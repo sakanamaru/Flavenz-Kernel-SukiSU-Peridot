@@ -288,6 +288,14 @@ jobs:
           grep -q '^CONFIG_KSU_SUSFS=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU_SUSFS not staged"; exit 1; }
           echo "SukiSU hooks + kernel config applied"
 
+      - name: Include SUSFS header for new builtin APIs
+        run: |
+          set -euo pipefail
+          cd kernel
+          for f in drivers/kernelsu/manager/pkg_observer.c drivers/kernelsu/supercall/dispatch.c; do
+            grep -q '#include <linux/susfs.h>' "$f" || sed -i '1i #include <linux/susfs.h>' "$f"
+          done
+          echo "SUSFS header include ensured"
       - name: Build kernel
         run: |
           export PATH="$HOME/clang/bin:$PATH"
