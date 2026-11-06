@@ -639,7 +639,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index 4d910be7c..572d3c20f 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,11 +32,21 @@
+@@ -32,10 +32,20 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>
@@ -649,7 +649,6 @@ index 4d910be7c..572d3c20f 100644
  
  #include "pnode.h"
  #include "internal.h"
- #include <trace/hooks/blk.h>
  
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +extern bool susfs_is_current_ksu_domain(void);
