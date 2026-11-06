@@ -280,12 +280,12 @@ jobs:
           set -euo pipefail
           cd kernel
           if ! grep -q 'config KSU_SUSFS_PRIORITY_UID_FILTER' drivers/kernelsu/Kconfig; then
-            cat >> drivers/kernelsu/Kconfig <<'EOF'
-config KSU_SUSFS_PRIORITY_UID_FILTER
-	bool "SUSFS getpriority uid bitmap filter"
-	depends on KSU_SUSFS
-	default y
-EOF
+            {
+              echo 'config KSU_SUSFS_PRIORITY_UID_FILTER'
+              echo '    bool "SUSFS getpriority uid bitmap filter"'
+              echo '    depends on KSU_SUSFS'
+              echo '    default y'
+            } >> drivers/kernelsu/Kconfig
           fi
           grep -A3 'config KSU_SUSFS_PRIORITY_UID_FILTER' drivers/kernelsu/Kconfig
       - name: Apply SukiSU hide hooks and ACK 6.1 compatibility fixes
