@@ -1,0 +1,17 @@
+# Normalize text files to LF in the repository.
+# Rationale: kernel patches are applied on Linux CI with `git apply`, which
+# does NOT strip CRLF (unlike GNU patch). A CRLF-mangled .patch silently
+# fails to apply or, worse, applies with fuzz. Keep every text artifact LF.
+* text=auto eol=lf
+
+*.patch  text eol=lf
+*.diff   text eol=lf
+*.sh     text eol=lf
+*.py     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.md     text eol=lf
+*.c      text eol=lf
+*.h      text eol=lf
+*.config text eol=lf
+*.env    text eol=lf

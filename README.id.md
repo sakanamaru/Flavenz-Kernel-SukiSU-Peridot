@@ -1,5 +1,12 @@
 # Flavenz Kernel untuk Xiaomi POCO F6 (Peridot)
 
+> [!WARNING]
+> **DOKUMEN INI USANG (diwarisi dari upstream Flavenz, KernelSU Next).**
+> Fakta build/rilis di sini tidak lagi berlaku. Dokumen resmi terbaru:
+> [README.md (Chinese)](README.md) dan [README.en.md (English)](README.en.md).
+> Versi kernel, flashing, AVB, GPL/source offer, dan alur rilis draft/approval
+> hanya dijamin akurat di dua dokumen tersebut.
+
 <div align="center">
 
 [![Kernel Version](https://img.shields.io/badge/Kernel-6.1.138-blue.svg)](https://kernel.org)
@@ -112,16 +119,23 @@ Zip juga di-upload sebagai artifact run (**Actions** → run hijau terbaru → A
 
 ---
 
-## ⚙️ Cara Flash
+## Cara Flash (WAJIB DIBACA)
 
-1. Unduh zip `Peridot-Kernel-*.zip` untuk flavor pilihan.
-2. Reboot ke custom recovery (TWRP, OrangeFox, atau NEBULA recovery).
-3. (Disarankan) Backup partisi **boot** dan **init_boot** terlebih dulu.
-4. Flash zip.
-5. Wipe Dalvik/Cache (opsional).
-6. Reboot ke System.
+> **PENTING (2026-11-07):** ROM port OS4 / Android 17 untuk peridot **belum punya
+> TWRP / OrangeFox / NEBULA**. Zip AnyKernel3 tetap butuh custom recovery, jadi
+> **cara flash lewat recovery TIDAK tersedia saat ini**. Jangan ikuti instruksi
+> recovery lama/upstream.
 
-> Rilis `Flavenz-20260910` (ack-full) sudah diuji: di-flash langsung dari asset release → boot stabil, Duck Detector bersih, benchmark AnTuTu terdokumentasi (lihat [Benchmark](#-benchmark)).
+Jalur yang benar: backup `boot`/`init_boot`/`vendor_boot` ke PC (bukan hanya
+`/sdcard`), ambil `Image` dari zip, repack dengan `scripts/repack_boot.py` ke
+`boot.img` stock versi ROM yang sama, lalu `fastboot boot` (uji RAM) dan
+`fastboot flash boot` setelah yakin. Boot image hasil repack **tidak ditandatangani
+dan tidak punya AVB footer yang valid**: hanya untuk bootloader unlocked dengan
+AVB/verity dimatikan; `fastboot boot` bukan rollback. Rollback = `fastboot flash
+boot_a/b` + `init_boot_a/b` dari backup PC. Detail lengkap: [README.en.md](README.en.md).
+
+Catatan: README ini juga masih menyebut KernelSU Next; build saat ini memakai
+**SukiSU-Ultra builtin** (lihat README.md / README.en.md).
 
 ---
 

@@ -1,5 +1,12 @@
 ### AnyKernel3 Ramdisk Mod Script
 ## osm0sis @ xda-developers
+#
+# NOTE (2026-11-07): the CI workflow generates its own anykernel.sh; this
+# checked-in copy is the reference for local packaging. It requires a CUSTOM
+# RECOVERY (no working TWRP/OrangeFox exists for the current OS4/Android 17
+# port). The kernel Image is UNSIGNED and has no valid AVB footer - only flash
+# with an unlocked bootloader / AVB disabled, after backing up boot+init_boot.
+# See README "Flashing" and the release notes.
 
 ### AnyKernel setup
 # global properties

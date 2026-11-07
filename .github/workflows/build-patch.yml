@@ -1,5 +1,11 @@
 name: Build Patch - Peridot (AK3 only)
 
+# LEGACY / PATCH-ONLY workflow (hardened 2026-11-07): packaging Image from
+# an existing artifact. The release step is OFF by default, creates a
+# prerelease with a unique tag, and NEVER deletes/recreates tags. New kernel
+# builds must go through build-droidspaces.yml (pinned inputs, provenance,
+# GPL assets, draft/approval flow).
+#
 # Jalur cepat (~2 menit): skip kompilasi, ambil Image dari artifact run
 # build-droidspaces.yml terakhir yang sukses, langsung repackage ke zip
 # AnyKernel3 baru. Berguna untuk:
@@ -19,9 +25,9 @@ on:
         required: false
         default: "patch"
       publish_release:
-        description: "Publish ke GitHub Releases sebagai pre-release (true/false)"
+        description: "LEGACY: publish patch zip as prerelease (true/false). Default false = artifact only, no release."
         required: false
-        default: "true"
+        default: "false"
 
 jobs:
   patch:
@@ -37,8 +43,10 @@ jobs:
       SUSFS_VERSION: v2.3.0
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Resolve source run ID
         run: |
@@ -200,7 +208,7 @@ jobs:
             mv "${ZIPPATH}" ./ || true
           sha256sum "${ZIPBASE}" > SHA256SUMS.txt
 
-          REL_TAG="Flavenz-${RELEASEDATE}-${PATCH_LABEL}"
+          REL_TAG="Flavenz-${RELEASEDATE}-patch-${PATCH_LABEL}-${GITHUB_SHA:0:7}-r${GITHUB_RUN_NUMBER}"
           REL_TITLE="Flavenz Kernel Peridot PATCH -- ${RELEASEDATE} (${PATCH_LABEL})"
 
           # Release notes ditulis via printf per baris (hindari heredoc di YAML)
@@ -212,20 +220,20 @@ jobs:
             printf '%s\n' "### Isi"
             printf '%s\n' "- KernelSU Next ${KERNELSU_VERSION} (pershoot dev-susfs)"
             printf '%s\n' "- SUSFS ${SUSFS_VERSION}"
-            printf '%s\n' "- Droidspaces full support (MACVLAN, IPv6 NAT, CFS bandwidth, CGROUP PIDs)"
+            printf '%s\n' "- Droidspaces kABI-safe support (MACVLAN, IPv6 NAT, namespaces, SYSVIPC, memcg)"
             printf '%s\n' "- SHA256SUMS.txt untuk verifikasi integritas"
             printf '%s\n' ""
             printf '%s\n' "### Cara flash"
             printf '%s\n' "1. Download zip di bawah (langsung flashable, tanpa ekstrak)"
             printf '%s\n' "2. Reboot ke OS dulu, lalu masuk recovery (agar /apex tidak ter-mount)"
-            printf '%s\n' "3. Flash via OrangeFox/TWRP, Wipe Dalvik/Cache, Reboot"
+            printf '%s\n' "3. Custom recovery required. NOTE: no working TWRP/OrangeFox exists for the current OS4/Android 17 port (2026-11-07)."
             printf '%s\n' ""
             printf '%s\n' "Project pribadi AS-IS tanpa garansi. Backup boot dan init_boot sebelum flash."
           } > rel_body.md
 
           if gh release view "${REL_TAG}" -R "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
-            echo "Release ${REL_TAG} sudah ada, hapus dulu"
-            gh release delete "${REL_TAG}" -R "${GITHUB_REPOSITORY}" --yes --cleanup-tag
+            echo "::error::Release ${REL_TAG} already exists; refusing to delete/recreate it. Use a new run (new run number)."
+            exit 1
           fi
 
           gh release create "${REL_TAG}" \

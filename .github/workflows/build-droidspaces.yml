@@ -1,23 +1,82 @@
 name: Build Kernel - Peridot (SukiSU+SUSFS)
 
+# =============================================================================
+# SECURITY MODEL (2026-11-07 P0 release-engineering hardening)
+#
+# * Every external build input is pinned in configs/pins.env (commit + sha256)
+#   and verified before use. Floating branches/tags are rejected.
+# * Patches are applied with `git apply --check` + `git apply` (exact context,
+#   zero fuzz). A patch that does not match the pinned sources fails the build.
+# * The build job is read-only (contents: read) and checks out without
+#   persisted credentials.
+# * Releases are created as DRAFTS by default (workflow input publish_release
+#   defaults to "false"). Publishing requires the protected `release`
+#   environment to be approved. Exp builds are always GitHub prereleases.
+# * Tags are unique per run (date + flavor + short SHAs + run number) and are
+#   NEVER deleted or recreated by CI.
+# * No boot image is attached to a release; see the release notes for the
+#   unsigned/no-AVB caveat and the manual fastboot path.
+#
+# MANUAL REPO SETTINGS this workflow expects (documented in README):
+#   1. Environment `release` with required reviewers (for publish_release=true).
+#   2. "Immutable releases" enabled (Settings -> General -> Releases) plus a
+#      tag protection rule for `Flavenz-*`. The workflow only warns if the
+#      immutable-releases API says it is disabled, because it cannot enable it.
+#   3. Optional: `RELEASE_GPG_PRIVATE_KEY` (armored) + `RELEASE_GPG_PASSPHRASE`
+#      secrets to sign SHA256SUMS.txt. Without them the release explicitly
+#      states "UNSIGNED" - it never pretends otherwise.
+# =============================================================================
+
 on:
   workflow_dispatch:
     inputs:
       trigger:
-        description: "Trigger ACK Kernel Build"
+        description: "Trigger ACK Kernel Build (kept for backwards compatibility; unused)"
         required: false
         default: "all"
       rom_build_date:
-        description: "ro.build.date ROM yang terpasang. Disarankan epoch: `adb shell getprop ro.build.date.utc`, atau format 'YYYY-MM-DD', atau string getprop utuh. Timestamp build kernel (uname -a) diturunkan darinya — fix Duck Detector build-time drift. Default = tanggal port HyperOS 3."
+        description: "OPTIONAL. Empty (default) = KBUILD_BUILD_TIMESTAMP = source commit date (deterministic, honest). If set (epoch getprop ro.build.date.utc / YYYY-MM-DD / full ro.build.date string), build time is explicitly synced to the ROM date and DISCLOSED in release notes + provenance."
         required: false
-        default: "2026-07-01"
+        default: ""
+      release_channel:
+        description: "exp = always published as GitHub prerelease (and draft by default). stable = only publishable with publish_release=true, environment approval and boot_test_status=boot-tested."
+        required: true
+        type: choice
+        options:
+          - exp
+          - stable
+        default: exp
+      publish_release:
+        description: "false (default) = leave the release as DRAFT. true = publish after protected `release` environment approval."
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
+      boot_test_status:
+        description: "Honest boot-test status recorded in release notes. stable + published requires boot-tested."
+        required: true
+        type: choice
+        options:
+          - not-boot-tested
+          - boot-tested
+        default: not-boot-tested
       autofdo_profile_url:
-        description: "URL profil AutoFDO (kernel.afdo, hasil simpleperf+create_llvm_prof dari device). KOSONG = build proven normal (identik jalur proven). Terisi = build final AutoFDO (CLANG_AUTOFDO_PROFILE) yang ikut auto-release."
+        description: "OPTIONAL AutoFDO profile (kernel.afdo). Empty = normal proven build path. Requires autofdo_profile_sha256 when set."
+        required: false
+        default: ""
+      autofdo_profile_sha256:
+        description: "REQUIRED when autofdo_profile_url is set: sha256 of the downloaded kernel.afdo."
         required: false
         default: ""
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: kernel-release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -25,19 +84,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # guidix-full DIHAPUS 2026-09-13: bootloop on-device (logs/recovery_20260913.log).
-        # ack-full satu-satunya flavor (boot-verified, release Flavenz-20260910).
+        # guidix-full removed 2026-09-13 (bootloop on-device).
+        # ack-full is the only boot-verified flavor.
         flavor: [ack-full]
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      flavor: ${{ steps.meta.outputs.flavor }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+      localversion: ${{ steps.meta.outputs.localversion }}
+      repo_short: ${{ steps.meta.outputs.repo_short }}
+      ack_short: ${{ steps.meta.outputs.ack_short }}
+      boot_test_status: ${{ steps.meta.outputs.boot_test_status }}
+      kernel_release: ${{ steps.export.outputs.kernel_release }}
+      build_timestamp: ${{ steps.export.outputs.build_timestamp }}
+      timestamp_source: ${{ steps.export.outputs.timestamp_source }}
     env:
       ARCH: arm64
-      KERNEL_COMMIT: 0c3d559bcd85
-      # SukiSU-Ultra builtin branch, pinned to 1cfa573 (2026-11-01) + upstream SUSFS (new AVD APIs)
-      SUKISU_COMMIT: 1cfa57340590971cba7521ed536da8ebbedc5f0a
-      SUKISU_VERSION: builtin-1cfa573
-      # SUSFS v2.3.0 (ShirkNeko/susfs4ksu gki-android14-6.1, rebased to ACK 0c3d559)
-      SUSFS_VERSION: v2.3.0
       FLAVOR: ${{ matrix.flavor }}
       KBUILD_BUILD_USER: "builder"
       KBUILD_BUILD_HOST: "sukisu-peridot-ci"
@@ -51,41 +115,113 @@ jobs:
           sudo docker image prune --all --force || true
           df -h
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - name: Compute ROM-synced build timestamp
-        env:
-          # github.event.inputs.* bukan inputs.* — konteks inputs.* pernah
-          # gagal di workflow ini (lihat error log: kasus inputs.flavor)
-          ROM_BUILD_DATE: ${{ github.event.inputs.rom_build_date }}
+      - name: Load pinned build inputs and verify action pins
         run: |
           set -euo pipefail
-          # Trim spasi di tepi input (dispatch UI kadang menambah newline).
-          IN=$(printf '%s' "${ROM_BUILD_DATE}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-          if [ -z "${IN}" ]; then
-            echo "::error::rom_build_date kosong — isi epoch (getprop ro.build.date.utc), YYYY-MM-DD, atau string ro.build.date utuh"
-            exit 1
+          test -f configs/pins.env
+          # Export every KEY=VALUE from the checked-in manifest to $GITHUB_ENV.
+          while IFS= read -r line; do
+            case "$line" in
+              ''|'#'*) continue ;;
+            esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            case "$key" in
+              *[!A-Za-z0-9_]*) echo "::error::configs/pins.env: invalid key: $key"; exit 1 ;;
+            esac
+            case "$value" in
+              \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            esac
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+          done < configs/pins.env
+
+          # Source the manifest itself for in-step validation (quoted POSIX values).
+          set -a
+          # shellcheck disable=SC1091
+          . configs/pins.env
+          set +a
+
+          for v in ACK_COMMIT SUKISU_COMMIT DEFCONFIG_COMMIT DROIDSPACES_COMMIT SUSFS_UPSTREAM_COMMIT; do
+            eval "val=\${$v:-}"
+            printf '%s' "$val" | grep -Eq '^[0-9a-f]{40}$' \
+              || { echo "::error::$v must be a full 40-char commit SHA (got: '$val')"; exit 1; }
+          done
+
+          wf=.github/workflows/build-droidspaces.yml
+          grep -q "uses: actions/checkout@${ACTION_CHECKOUT_SHA}" "$wf" \
+            || { echo "::error::actions/checkout pin mismatch"; exit 1; }
+          grep -q "uses: actions/upload-artifact@${ACTION_UPLOAD_ARTIFACT_SHA}" "$wf" \
+            || { echo "::error::actions/upload-artifact pin mismatch"; exit 1; }
+          grep -q "uses: actions/download-artifact@${ACTION_DOWNLOAD_ARTIFACT_SHA}" "$wf" \
+            || { echo "::error::actions/download-artifact pin mismatch"; exit 1; }
+
+          if grep -nE 'uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@(main|master|v[0-9]+)([[:space:]]|$)' "$wf"; then
+            echo "::error::floating action reference found (pin by commit SHA)"; exit 1
           fi
-          TS=""
-          if printf '%s' "${IN}" | grep -qE '^[0-9]{9,11}$'; then
-            # Epoch (disarankan: adb shell getprop ro.build.date.utc)
-            TS=$(date -u -d "@${IN}" '+%a %b %e %H:%M:%S UTC %Y')
-          elif TS=$(date -u -d "${IN}" '+%a %b %e %H:%M:%S UTC %Y' 2>/dev/null); then
-            # Format bebas yang dipahami GNU date: 2026-07-01,
-            # "2026-07-01 12:00:00", atau string ro.build.date utuh
-            :
+
+          echo "Pinned inputs loaded: ACK=${ACK_COMMIT:0:12} SukiSU=${SUKISU_COMMIT:0:12} defconfig=${DEFCONFIG_COMMIT:0:12}"
+
+      - name: Compute build metadata (honest version + timestamp)
+        id: meta
+        env:
+          ROM_BUILD_DATE_INPUT: ${{ github.event.inputs.rom_build_date }}
+          RELEASE_CHANNEL_INPUT: ${{ github.event.inputs.release_channel }}
+          BOOT_TEST_INPUT: ${{ github.event.inputs.boot_test_status }}
+        run: |
+          set -euo pipefail
+          BUILD_DATE=$(date -u +%Y%m%d)
+          REPO_SHORT=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
+          ACK_SHORT=$(printf '%s' "$ACK_COMMIT" | cut -c1-12)
+          LOCALVERSION="-flavenz-${BUILD_DATE}-${FLAVOR}-g${ACK_SHORT}-${REPO_SHORT}"
+          RELEASE_TAG="Flavenz-${BUILD_DATE}-${FLAVOR}-${REPO_SHORT}-g${ACK_SHORT}-r${GITHUB_RUN_NUMBER}"
+
+          IN=$(printf '%s' "${ROM_BUILD_DATE_INPUT:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          if [ -n "$IN" ]; then
+            if printf '%s' "$IN" | grep -qE '^[0-9]{9,11}$'; then
+              TS=$(date -u -d "@${IN}" '+%a %b %e %H:%M:%S UTC %Y') \
+                || { echo "::error::rom_build_date epoch is invalid: '$IN'"; exit 1; }
+            else
+              TS=$(date -u -d "${IN}" '+%a %b %e %H:%M:%S UTC %Y' 2>/dev/null) \
+                || { echo "::error::rom_build_date cannot be parsed: '$IN' (epoch / YYYY-MM-DD / ro.build.date string)"; exit 1; }
+            fi
+            TIMESTAMP_SOURCE="rom_synced_explicit"
+            echo "::warning::KBUILD_BUILD_TIMESTAMP is explicitly synced to the operator-supplied ROM date ($IN). This is disclosed in PROVENANCE.txt and the release notes. Leave rom_build_date empty to use the source commit date instead."
           else
-            echo "::error::rom_build_date tidak bisa diparse: '${IN}' (epoch / YYYY-MM-DD / ro.build.date string)"
-            exit 1
+            SRC_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+            TS=$(date -u -d "@${SRC_EPOCH}" '+%a %b %e %H:%M:%S UTC %Y')
+            TIMESTAMP_SOURCE="source_commit_date"
           fi
-          # Format identik dengan "Wed Dec 3 02:05:30 UTC 2025" milik kernel
-          # stock — scripts/mkcompile_h menuliskannya apa adanya ke uts_banner
-          # (#1 SMP PREEMPT <TS> di uname -a). Sinkron dengan ro.build.date
-          # ROM → Duck Detector "build time drift" tidak mempan lagi, dan
-          # tetap deterministik untuk input yang sama.
-          echo "KBUILD_BUILD_TIMESTAMP=${TS}" >> "$GITHUB_ENV"
-          echo "Kernel build timestamp disinkronkan ke ROM: ${TS}"
+
+          {
+            echo "BUILD_DATE=${BUILD_DATE}"
+            echo "REPO_SHORT=${REPO_SHORT}"
+            echo "ACK_SHORT=${ACK_SHORT}"
+            echo "LOCALVERSION=${LOCALVERSION}"
+            echo "RELEASE_TAG=${RELEASE_TAG}"
+            echo "KBUILD_BUILD_TIMESTAMP=${TS}"
+            echo "BUILD_TIMESTAMP_SOURCE=${TIMESTAMP_SOURCE}"
+            echo "RELEASE_CHANNEL=${RELEASE_CHANNEL_INPUT}"
+            echo "BOOT_TEST_STATUS=${BOOT_TEST_INPUT}"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo "flavor=${FLAVOR}"
+            echo "release_tag=${RELEASE_TAG}"
+            echo "build_date=${BUILD_DATE}"
+            echo "localversion=${LOCALVERSION}"
+            echo "repo_short=${REPO_SHORT}"
+            echo "ack_short=${ACK_SHORT}"
+            echo "boot_test_status=${BOOT_TEST_INPUT}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "LOCALVERSION=${LOCALVERSION}"
+          echo "RELEASE_TAG=${RELEASE_TAG}"
+          echo "KBUILD_BUILD_TIMESTAMP=${TS} (source: ${TIMESTAMP_SOURCE})"
 
       - name: Install dependencies
         run: |
@@ -93,41 +229,43 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             bc bison flex libssl-dev libelf-dev \
             python3 python3-pip cpio pahole \
-            lz4 zstd libzstd-dev curl git zip \
+            lz4 zstd libzstd-dev curl git zip unzip patch \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu
+            binutils-aarch64-linux-gnu gnupg
 
-      - name: Setup Neutron Clang
+      - name: Setup Neutron Clang (sha256-pinned)
+        env:
+          NEUTRON_TARBALL: neutron-clang-30062026.tar.zst
         run: |
           set -euo pipefail
           rm -rf "$HOME/clang"; mkdir -p "$HOME/clang"; cd "$HOME/clang"
-          curl -fsSLO "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst"
-          tar -I zstd -xf "neutron-clang-30062026.tar.zst" && rm -f "neutron-clang-30062026.tar.zst"
-          curl -fsSLo antman "https://raw.githubusercontent.com/Neutron-Toolchains/antman/0b32c45e3ad83a953b4bc3fd2feb4ad3cc87c1e8/antman"
+          curl -fsSL --retry 3 --retry-delay 10 -o "$NEUTRON_TARBALL" "$NEUTRON_CLANG_URL"
+          printf '%s  %s\n' "$NEUTRON_CLANG_SHA256" "$NEUTRON_TARBALL" | sha256sum -c -
+          tar -I zstd -xf "$NEUTRON_TARBALL"
+          rm -f "$NEUTRON_TARBALL"
+          curl -fsSL --retry 3 --retry-delay 10 -o antman "$NEUTRON_ANTMAN_URL"
+          printf '%s  antman\n' "$NEUTRON_ANTMAN_SHA256" | sha256sum -c -
           chmod +x antman
           for i in 1 2 3 4; do
             ./antman --patch=glibc && break
             [ "$i" = 4 ] && { echo "::error::antman failed 4 times"; exit 1; }
             echo "antman attempt $i failed; retrying in $((i*20))s"; sleep $((i*20))
           done
-          echo "$HOME/clang/bin" >> $GITHUB_PATH
+          echo "$HOME/clang/bin" >> "$GITHUB_PATH"
+          echo "Neutron Clang 30062026 verified (sha256 ${NEUTRON_CLANG_SHA256})"
 
-      - name: Clone Pure ACK Source + Defconfig
+      - name: Clone pinned ACK source + pinned peridot defconfig
         if: ${{ matrix.flavor == 'ack-full' }}
         run: |
-          # Clone android.googlesource.com sering putus di tengah jalan di runner
-          # ("fetch-pack: unexpected disconnect", "early EOF", exit 128) — flaky,
-          # bukan bug repo. Retry dengan backoff; konfigurasi low-speed supaya
-          # clone macet tidak menggantung sampai timeout job.
+          set -euo pipefail
+          # ACK clone from android.googlesource.com is flaky; retry with backoff.
           rm -rf kernel
           git config --global http.lowSpeedLimit 1000
           git config --global http.lowSpeedTime 300
           ACK_OK=false
           for i in 1 2 3; do
             echo "ACK clone attempt $i/3"
-            if git clone --filter=blob:none --no-checkout \
-              https://android.googlesource.com/kernel/common \
-              kernel; then
+            if git clone --filter=blob:none --no-checkout "$ACK_REPO_URL" kernel; then
               ACK_OK=true
               break
             fi
@@ -136,34 +274,44 @@ jobs:
           done
           [ "$ACK_OK" = true ] || { echo "::error::ACK clone failed after 3 attempts"; exit 1; }
           cd kernel
-          # Checkout commit juga bisa kena flake jaringan yang sama — retry.
           CO_OK=false
           for i in 1 2 3; do
-            echo "ACK checkout attempt $i/3"
-            if git checkout $KERNEL_COMMIT; then
+            echo "ACK checkout attempt $i/3 (commit ${ACK_COMMIT})"
+            if git -c advice.detachedHead=false checkout --detach "$ACK_COMMIT"; then
               CO_OK=true
               break
             fi
             sleep $((i * 15))
           done
           [ "$CO_OK" = true ] || { echo "::error::ACK checkout failed after 3 attempts"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$ACK_COMMIT" \
+            || { echo "::error::ACK HEAD $(git rev-parse HEAD) != pinned $ACK_COMMIT"; exit 1; }
           cd ..
 
-          echo "Attempting to clone peridot-defconfig with branch fallback..."
-          CLONED=false
-          for branch in 17 main theettam-2.8 theettam-2.7; do
-            echo "Trying branch: $branch"
-            if git clone --depth=1 -b "$branch" https://github.com/Mohithash/kernel_xiaomi_sm8635 peridot-defconfig 2>/dev/null; then
-              echo "Successfully cloned using branch: $branch"
-              CLONED=true
+          # Pinned peridot defconfig: commit SHA + per-file sha256, no branch fallback.
+          rm -rf peridot-defconfig
+          mkdir peridot-defconfig
+          cd peridot-defconfig
+          git init -q
+          git remote add origin "$DEFCONFIG_REPO_URL"
+          DEF_OK=false
+          for i in 1 2 3; do
+            echo "defconfig fetch attempt $i/3 (commit ${DEFCONFIG_COMMIT})"
+            if git fetch --depth=1 origin "$DEFCONFIG_COMMIT"; then
+              DEF_OK=true
               break
             fi
-            rm -rf peridot-defconfig
+            [ "$i" = 3 ] || sleep $((i * 20))
           done
-          if [ "$CLONED" = false ]; then
-            echo "::error::Failed to clone peridot-defconfig from any candidate branch!"
-            exit 1
-          fi
+          [ "$DEF_OK" = true ] || { echo "::error::defconfig fetch by pinned SHA failed after 3 attempts"; exit 1; }
+          git -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$DEFCONFIG_COMMIT" \
+            || { echo "::error::defconfig HEAD $(git rev-parse HEAD) != pinned $DEFCONFIG_COMMIT"; exit 1; }
+          printf '%s  %s\n' "$DEFCONFIG_GKI_SHA256" arch/arm64/configs/gki_defconfig | sha256sum -c -
+          printf '%s  %s\n' "$DEFCONFIG_VENDOR_SHA256" arch/arm64/configs/vendor/peridot_GKI.config | sha256sum -c -
+          printf '%s  %s\n' "$DEFCONFIG_EXRAWARN_SHA256" scripts/Makefile.extrawarn | sha256sum -c -
+
+          cd ..
           mkdir -p kernel/arch/arm64/configs/vendor
           cp peridot-defconfig/arch/arm64/configs/gki_defconfig \
             kernel/arch/arm64/configs/gki_defconfig
@@ -174,9 +322,11 @@ jobs:
           echo 'KBUILD_CFLAGS += $(call cc-disable-warning, uninitialized-const-pointer)' \
             >> kernel/scripts/Makefile.extrawarn
           rm -rf peridot-defconfig
+          echo "ACK + peridot defconfig pinned (defconfig ${DEFCONFIG_COMMIT})"
 
       - name: Apply Droidspaces & Container Configs
         run: |
+          set -euo pipefail
           cd kernel
           CONFIG_FILE="arch/arm64/configs/gki_defconfig"
           if [ -f "arch/arm64/configs/vendor/peridot_GKI.config" ]; then
@@ -203,36 +353,38 @@ jobs:
             CONFIG_IP6_NF_NAT=y \
             CONFIG_IP6_NF_TARGET_MASQUERADE=y \
             >> "$CONFIG_FILE"
-          # Verifikasi Droidspaces optional configs (kABI-safe only: MACVLAN, IP6_NF_NAT, IP6_NF_TARGET_MASQUERADE)
-          # PERINGATAN KERAS: JANGAN aktifkan CONFIG_CFS_BANDWIDTH atau CONFIG_CGROUP_PIDS di GKI!
-          # Keduanya mengubah ukuran task_struct/cgroup -> merusak kABI vendor modules -> bootloop!
+          # kABI-safe Droidspaces configs only (MACVLAN, IP6_NF_NAT, IP6_NF_TARGET_MASQUERADE).
+          # HARD WARNING: do NOT enable CONFIG_CFS_BANDWIDTH or CONFIG_CGROUP_PIDS on GKI:
+          # they change task_struct/cgroup layout -> breaks vendor module kABI -> bootloop.
           for cfg in CONFIG_MACVLAN CONFIG_IP6_NF_NAT CONFIG_IP6_NF_TARGET_MASQUERADE; do
             grep -q "^${cfg}" "$CONFIG_FILE" \
-              || { echo "::error::${cfg} tidak masuk ke $CONFIG_FILE"; exit 1; }
+              || { echo "::error::${cfg} not staged in $CONFIG_FILE"; exit 1; }
           done
           cd ..
+          echo "Droidspaces container configs staged"
 
-      - name: Apply kABI SYSVIPC patch (GKI 6.1)
-        run: |
-          wget -q "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch" \
-            -O sysvipc_kabi.patch
-          cd kernel
-          git apply ../sysvipc_kabi.patch || echo "kABI patch applied with notes"
-          cd ..
-          rm sysvipc_kabi.patch
-
-      - name: Apply AutoFDO backport (hanya jika profil disediakan)
-        if: ${{ github.event.inputs.autofdo_profile_url != '' }}
+      - name: Apply kABI SYSVIPC patch (pinned commit + sha256, exact apply)
         run: |
           set -euo pipefail
-          # Tahap 2: plumbing AutoFDO (backport upstream 315ad8780a) hanya saat
-          # operator menyediakan profil device. Jalur default (tanpa profil)
-          # TIDAK tersentuh — byte-identik jalur proven.
-          git -C kernel apply --check ../patches/0001-kbuild-Add-AutoFDO-support-for-Clang-build-ACK-6.1.patch
-          git -C kernel apply ../patches/0001-kbuild-Add-AutoFDO-support-for-Clang-build-ACK-6.1.patch
-          # CONFIG_AUTOFDO_CLANG=y di config final (resolve sama seperti step
-          # "Apply Droidspaces & Container Configs"); tanpa ini include
-          # Makefile.autofdo tidak jalan dan profil diabaikan diam-diam.
+          curl -fsSL --retry 3 --retry-delay 10 -o droidspaces_kabi.patch "$DROIDSPACES_PATCH_URL"
+          printf '%s  droidspaces_kabi.patch\n' "$DROIDSPACES_PATCH_SHA256" | sha256sum -c -
+          ( cd kernel && git apply --check "$GITHUB_WORKSPACE/droidspaces_kabi.patch" )
+          ( cd kernel && git apply "$GITHUB_WORKSPACE/droidspaces_kabi.patch" )
+          rm -f droidspaces_kabi.patch
+          echo "Droidspaces kABI patch applied exactly (commit ${DROIDSPACES_COMMIT})"
+
+      - name: Apply AutoFDO backport (only when a profile is supplied)
+        if: ${{ github.event.inputs.autofdo_profile_url != '' }}
+        env:
+          AUTOFDO_PROFILE_URL_INPUT: ${{ github.event.inputs.autofdo_profile_url }}
+          AUTOFDO_PROFILE_SHA256_INPUT: ${{ github.event.inputs.autofdo_profile_sha256 }}
+        run: |
+          set -euo pipefail
+          [ -n "$AUTOFDO_PROFILE_URL_INPUT" ] || { echo "::error::autofdo_profile_url empty"; exit 1; }
+          [ -n "$AUTOFDO_PROFILE_SHA256_INPUT" ] || { echo "::error::autofdo_profile_sha256 is required when autofdo_profile_url is set"; exit 1; }
+          printf '%s  %s\n' "$AUTOFDO_PATCH_SHA256" "$AUTOFDO_PATCH" | sha256sum -c -
+          git -C kernel apply --check "$GITHUB_WORKSPACE/$AUTOFDO_PATCH"
+          git -C kernel apply "$GITHUB_WORKSPACE/$AUTOFDO_PATCH"
           CONFIG_FILE="kernel/arch/arm64/configs/gki_defconfig"
           if [ -f "kernel/arch/arm64/configs/vendor/peridot_GKI.config" ]; then
             CONFIG_FILE="kernel/arch/arm64/configs/vendor/peridot_GKI.config"
@@ -240,40 +392,57 @@ jobs:
           grep -q '^CONFIG_AUTOFDO_CLANG' "$CONFIG_FILE" \
             || echo 'CONFIG_AUTOFDO_CLANG=y' >> "$CONFIG_FILE"
           echo "AUTOFDO_PROFILE_MODE=true" >> "$GITHUB_ENV"
-          echo "AutoFDO backport terpasang — build final dengan profil"
+          echo "AutoFDO backport applied exactly (patch sha256 ${AUTOFDO_PATCH_SHA256})"
 
-      - name: Download AutoFDO profile
+      - name: Download AutoFDO profile (sha256-verified)
         if: ${{ github.event.inputs.autofdo_profile_url != '' }}
+        env:
+          AUTOFDO_PROFILE_URL_INPUT: ${{ github.event.inputs.autofdo_profile_url }}
+          AUTOFDO_PROFILE_SHA256_INPUT: ${{ github.event.inputs.autofdo_profile_sha256 }}
         run: |
           set -euo pipefail
-          curl -fSL --retry 3 -o kernel.afdo "${{ github.event.inputs.autofdo_profile_url }}"
-          [ -s kernel.afdo ] || { echo "::error::profil AutoFDO kosong"; exit 1; }
+          [ -n "$AUTOFDO_PROFILE_SHA256_INPUT" ] || { echo "::error::autofdo_profile_sha256 is required"; exit 1; }
+          curl -fsSL --retry 3 --retry-delay 10 -o kernel.afdo "$AUTOFDO_PROFILE_URL_INPUT"
+          printf '%s  kernel.afdo\n' "$AUTOFDO_PROFILE_SHA256_INPUT" | sha256sum -c -
+          [ -s kernel.afdo ] || { echo "::error::AutoFDO profile is empty"; exit 1; }
           ls -lh kernel.afdo
 
-      - name: Setup SukiSU-Ultra (builtin branch, pinned commit)
+      - name: Setup SukiSU-Ultra (pinned commit, setup.sh downloaded + sha256-verified)
         run: |
           set -euo pipefail
-          cd kernel
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${SUKISU_COMMIT}/kernel/setup.sh" | bash -s builtin
-          test -d KernelSU || { echo "::error::SukiSU clone failed"; exit 1; }
-          cd KernelSU
-          git checkout "${SUKISU_COMMIT}"
-          cd ..
-          test -e drivers/kernelsu/Kconfig || { echo "::error::drivers/kernelsu/Kconfig missing"; exit 1; }
-          grep -q "config KSU_SUSFS" drivers/kernelsu/Kconfig || { echo "::error::SukiSU SUSFS Kconfig missing (wrong branch?)"; exit 1; }
-          echo "SukiSU-Ultra builtin branch ready: ${SUKISU_COMMIT}"
+          SETUP="$RUNNER_TEMP/sukisu-setup.sh"
+          curl -fsSL --retry 3 --retry-delay 10 -o "$SETUP" "$SUKISU_SETUP_URL"
+          printf '%s  %s\n' "$SUKISU_SETUP_SHA256" "$SETUP" | sha256sum -c -
+          # setup.sh clones SukiSU and checks out the argument. Pass the full
+          # pinned commit (NOT a branch name) and verify the result afterwards.
+          ( cd kernel && bash "$SETUP" "$SUKISU_COMMIT" )
+          test -d kernel/KernelSU || { echo "::error::SukiSU clone failed"; exit 1; }
+          test "$(git -C kernel/KernelSU rev-parse HEAD)" = "$SUKISU_COMMIT" \
+            || { echo "::error::KernelSU HEAD $(git -C kernel/KernelSU rev-parse HEAD) != pinned $SUKISU_COMMIT"; exit 1; }
+          test -z "$(git -C kernel/KernelSU status --porcelain)" \
+            || { echo "::error::KernelSU worktree is dirty after setup"; git -C kernel/KernelSU status --porcelain; exit 1; }
+          test -e kernel/drivers/kernelsu/Kconfig || { echo "::error::drivers/kernelsu/Kconfig missing"; exit 1; }
+          grep -q "config KSU_SUSFS" kernel/drivers/kernelsu/Kconfig \
+            || { echo "::error::SukiSU SUSFS Kconfig missing (wrong commit?)"; exit 1; }
+          echo "SukiSU-Ultra builtin ready: ${SUKISU_COMMIT} (setup.sh sha256 ${SUKISU_SETUP_SHA256})"
 
-      - name: Setup SUSFS v2.3.0 (rebased to ACK 0c3d559)
+      - name: Setup SUSFS v2.3.0 (vendored + sha256, exact apply, no fuzz)
+        env:
+          SUSFS_DIR: patches/susfs
         run: |
           set -euo pipefail
-          cp patches/susfs/fs/susfs.c kernel/fs/
-          cp patches/susfs/include/linux/susfs.h kernel/include/linux/
-          cp patches/susfs/include/linux/susfs_def.h kernel/include/linux/
-          cd kernel
-          patch -p1 --fuzz=3 --no-backup-if-mismatch < ../patches/susfs/50_add_susfs_in_gki-android14-6.1-ack-0c3d559.patch
-          test -f fs/susfs.c || { echo "::error::fs/susfs.c missing"; exit 1; }
-          grep -q "CONFIG_KSU_SUSFS" fs/Makefile || { echo "::error::SUSFS fs/Makefile hunk missing"; exit 1; }
-          echo "SUSFS core patched"
+          printf '%s  %s\n' "$SUSFS_C_SHA256" "$SUSFS_DIR/fs/susfs.c" | sha256sum -c -
+          printf '%s  %s\n' "$SUSFS_HEADER_SHA256" "$SUSFS_DIR/include/linux/susfs.h" | sha256sum -c -
+          printf '%s  %s\n' "$SUSFS_DEF_HEADER_SHA256" "$SUSFS_DIR/include/linux/susfs_def.h" | sha256sum -c -
+          printf '%s  %s\n' "$SUSFS_PATCH_SHA256" "$SUSFS_PATCH" | sha256sum -c -
+          cp "$SUSFS_DIR/fs/susfs.c" kernel/fs/
+          cp "$SUSFS_DIR/include/linux/susfs.h" kernel/include/linux/
+          cp "$SUSFS_DIR/include/linux/susfs_def.h" kernel/include/linux/
+          git -C kernel apply --check "$GITHUB_WORKSPACE/$SUSFS_PATCH"
+          git -C kernel apply "$GITHUB_WORKSPACE/$SUSFS_PATCH"
+          test -f kernel/fs/susfs.c || { echo "::error::fs/susfs.c missing"; exit 1; }
+          grep -q "CONFIG_KSU_SUSFS" kernel/fs/Makefile || { echo "::error::SUSFS fs/Makefile hunk missing"; exit 1; }
+          echo "SUSFS core patched exactly (vendored v${SUSFS_VERSION})"
 
       - name: Add SUSFS priority uid Kconfig option
         run: |
@@ -288,29 +457,61 @@ jobs:
             } >> drivers/kernelsu/Kconfig
           fi
           grep -A3 'config KSU_SUSFS_PRIORITY_UID_FILTER' drivers/kernelsu/Kconfig
-      - name: Apply SukiSU hide hooks and ACK 6.1 compatibility fixes
+
+      - name: Apply SukiSU hide hooks + ACK 6.1 compatibility fixes (exact apply)
+        env:
+          HIDE_PATCH_FILE: ${{ github.workspace }}/patches/sukisu/69_hide_stuff.patch
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$HIDE_PATCH_SHA256" "$HIDE_PATCH" | sha256sum -c -
+          git -C kernel apply --check "$GITHUB_WORKSPACE/$HIDE_PATCH"
+          git -C kernel apply "$GITHUB_WORKSPACE/$HIDE_PATCH"
+          python3 scripts/ci/fix_task_mmu.py kernel/fs/proc/task_mmu.c
+          CONFIG_FILE="kernel/arch/arm64/configs/vendor/peridot_GKI.config"
+          test -f "$CONFIG_FILE" || { echo "::error::$CONFIG_FILE missing"; exit 1; }
+          cat configs/sukisu_susfs.config >> "$CONFIG_FILE"
+          grep -q '^CONFIG_KSU=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU not staged"; exit 1; }
+          grep -q '^CONFIG_KSU_SUSFS=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU_SUSFS not staged"; exit 1; }
+          echo "SukiSU hooks + kernel config applied exactly"
+
+      - name: Enforce honest kernel version strings (LOCALVERSION, no UNAME_OVERRIDE/GMS spoof)
         run: |
           set -euo pipefail
           cd kernel
-          patch -p1 -F 3 --no-backup-if-mismatch < ../patches/sukisu/69_hide_stuff.patch
-          python3 ../scripts/ci/fix_task_mmu.py fs/proc/task_mmu.c
-          CONFIG_FILE="arch/arm64/configs/vendor/peridot_GKI.config"
-          test -f "$CONFIG_FILE" || { echo "::error::$CONFIG_FILE missing"; exit 1; }
-          cat ../configs/sukisu_susfs.config >> "$CONFIG_FILE"
-          grep -q '^CONFIG_KSU=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU not staged"; exit 1; }
-          grep -q '^CONFIG_KSU_SUSFS=y' "$CONFIG_FILE" || { echo "::error::CONFIG_KSU_SUSFS not staged"; exit 1; }
-          echo "SukiSU hooks + kernel config applied"
+          CFG=arch/arm64/configs/vendor/peridot_GKI.config
+          GKI=arch/arm64/configs/gki_defconfig
+          test -f "$CFG"
+          # Drop the vendor defconfig's old spoofed version/override symbols.
+          for f in "$CFG" "$GKI"; do
+            sed -i -E '/^CONFIG_LOCALVERSION(=|_AUTO=)/d' "$f"
+            sed -i -E '/^CONFIG_UNAME_OVERRIDE(=|_TARGET=|_STRING=)/d' "$f"
+          done
+          {
+            printf 'CONFIG_LOCALVERSION="%s"\n' "$LOCALVERSION"
+            printf 'CONFIG_LOCALVERSION_AUTO=n\n'
+            printf '# CONFIG_UNAME_OVERRIDE is not set\n'
+          } >> "$CFG"
+          grep -Fq "CONFIG_LOCALVERSION=\"$LOCALVERSION\"" "$CFG"
+          grep -q '^CONFIG_LOCALVERSION_AUTO=n' "$CFG"
+          if git grep -nE 'CONFIG_UNAME_OVERRIDE(=|_TARGET=|_STRING=)' -- 'arch/arm64/configs'; then
+            echo "::error::CONFIG_UNAME_OVERRIDE spoof still present in defconfigs"; exit 1
+          fi
+          echo "Honest LOCALVERSION enforced: ${LOCALVERSION} (LOCALVERSION_AUTO=n, UNAME_OVERRIDE disabled)"
 
       - name: Include SUSFS header for new builtin APIs
         run: |
           set -euo pipefail
           cd kernel
           for f in drivers/kernelsu/manager/pkg_observer.c drivers/kernelsu/supercall/dispatch.c; do
+            test -f "$f" || { echo "::error::$f missing"; exit 1; }
             grep -q '#include <linux/susfs.h>' "$f" || sed -i '1i #include <linux/susfs.h>' "$f"
+            test "$(grep -c '#include <linux/susfs.h>' "$f")" -ge 1
           done
           echo "SUSFS header/extern ensured"
+
       - name: Build kernel
         run: |
+          set -euo pipefail
           export PATH="$HOME/clang/bin:$PATH"
           CLANG_BIN=$HOME/clang/bin
 
@@ -330,13 +531,11 @@ jobs:
             KCFLAGS="-Wno-default-const-init-var-unsafe -Wno-error -Wno-implicit-fallthrough -march=armv9.2-a+crypto+dotprod"
           )
 
-          # Tahap 2: profil AutoFDO (hanya ada jika operator mengisi
-          # autofdo_profile_url saat dispatch) — variabel build upstream
           if [ -f kernel.afdo ]; then
             MAKE_FLAGS+=(CLANG_AUTOFDO_PROFILE="$GITHUB_WORKSPACE/kernel.afdo")
-            echo "Build AutoFDO FINAL: CLANG_AUTOFDO_PROFILE=$GITHUB_WORKSPACE/kernel.afdo"
+            echo "AutoFDO FINAL build: CLANG_AUTOFDO_PROFILE=$GITHUB_WORKSPACE/kernel.afdo"
           else
-            echo "Jalur proven normal (tanpa AutoFDO profile)"
+            echo "Normal proven path (no AutoFDO profile)"
           fi
 
           cd kernel
@@ -346,7 +545,7 @@ jobs:
           fi
           make "${MAKE_FLAGS[@]}" Image Image.gz dtbs
 
-          # Gate kABI-safety & features verification
+          # --- feature gates (unchanged) -------------------------------------
           grep -q '^CONFIG_KSU=y' out/.config \
             || { echo "::error::CONFIG_KSU tidak aktif di .config"; exit 1; }
           grep -q '^CONFIG_KSU_SUSFS=y' out/.config \
@@ -361,37 +560,172 @@ jobs:
           if grep -q '^CONFIG_CGROUP_PIDS=y' out/.config; then
             echo "::error::FATAL: CONFIG_CGROUP_PIDS aktif! Akan menyebabkan bootloop."; exit 1;
           fi
-          echo "Gate kABI & Features OK: KSU+SUSFS+MACVLAN+IP6_NAT aktif, CFS_BANDWIDTH/PIDS nonaktif"
+
+          # --- version-honesty gates (new) -----------------------------------
+          grep -Fq "CONFIG_LOCALVERSION=\"$LOCALVERSION\"" out/.config \
+            || { echo "::error::CONFIG_LOCALVERSION not '$LOCALVERSION' in out/.config"; exit 1; }
+          if grep -q '^CONFIG_LOCALVERSION_AUTO=y' out/.config; then
+            echo "::error::CONFIG_LOCALVERSION_AUTO=y; version would be git-derived/unstable"; exit 1
+          fi
+          if grep -q '^CONFIG_UNAME_OVERRIDE' out/.config; then
+            echo "::error::CONFIG_UNAME_OVERRIDE present in out/.config (spoofed uname is not allowed)"; exit 1
+          fi
+          KERNEL_RELEASE=$(cat out/include/config/kernel.release)
+          test "$KERNEL_RELEASE" = "${EXPECTED_KERNEL_SUBLEVEL}${LOCALVERSION}" \
+            || { echo "::error::kernel.release '$KERNEL_RELEASE' != '${EXPECTED_KERNEL_SUBLEVEL}${LOCALVERSION}'"; exit 1; }
+          IMAGE=out/arch/arm64/boot/Image
+          IMAGE_BANNER=$(strings "$IMAGE" | grep -m1 '^Linux version ' || true)
+          [ -n "$IMAGE_BANNER" ] || { echo "::error::no 'Linux version' banner in Image"; exit 1; }
+          printf '%s' "$IMAGE_BANNER" | grep -Fq "${EXPECTED_KERNEL_SUBLEVEL}${LOCALVERSION}" \
+            || { echo "::error::Image banner does not carry honest LOCALVERSION: ${IMAGE_BANNER}"; exit 1; }
+          printf '%s' "$IMAGE_BANNER" | grep -Fq "${KBUILD_BUILD_TIMESTAMP}" \
+            || { echo "::error::Image banner does not carry KBUILD_BUILD_TIMESTAMP '${KBUILD_BUILD_TIMESTAMP}'"; exit 1; }
+          if strings "$IMAGE" | grep -Fq '6.1.118-android14-11-ga3b9c44908dd-ab13320413'; then
+            echo "::error::old spoofed UNAME_OVERRIDE string found in Image"; exit 1
+          fi
+          if strings "$IMAGE" | grep -Fq 'com.google.android.gms'; then
+            echo "::error::GMS uname-override target string found in Image"; exit 1
+          fi
+
+          {
+            echo "KERNEL_RELEASE=${KERNEL_RELEASE}"
+            echo "IMAGE_BANNER=${IMAGE_BANNER}"
+            echo "IMAGE_SHA256=$(sha256sum "$IMAGE" | cut -d' ' -f1)"
+            echo "IMAGE_SIZE=$(stat -c%s "$IMAGE")"
+            echo "CONFIG_SHA256=$(sha256sum out/.config | cut -d' ' -f1)"
+          } >> "$GITHUB_ENV"
+          echo "Gate kABI/features/version OK: ${KERNEL_RELEASE}"
+          echo "Banner: ${IMAGE_BANNER}"
+
+      - name: Generate provenance and license/source-offer documents
+        env:
+          AUTOFDO_PROFILE_URL_INPUT: ${{ github.event.inputs.autofdo_profile_url }}
+          AUTOFDO_PROFILE_SHA256_INPUT: ${{ github.event.inputs.autofdo_profile_sha256 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${AUTOFDO_PROFILE_URL_INPUT:-}" ]; then
+            AUTOFDO_MODE="enabled (CLANG_AUTOFDO_PROFILE, profile sha256 ${AUTOFDO_PROFILE_SHA256_INPUT})"
+          else
+            AUTOFDO_MODE="disabled (normal proven path)"
+          fi
+          if [ "$BUILD_TIMESTAMP_SOURCE" = "rom_synced_explicit" ]; then
+            TIMESTAMP_NOTE="KBUILD_BUILD_TIMESTAMP was explicitly synced to the operator-supplied ROM date (disclosed, not disguised)."
+          else
+            TIMESTAMP_NOTE="KBUILD_BUILD_TIMESTAMP is the source commit date (deterministic and honest)."
+          fi
+
+          {
+            echo "format: flavenz-kernel-provenance-v1"
+            echo "release_tag: ${RELEASE_TAG}"
+            echo "generated_utc: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "repository: ${GITHUB_REPOSITORY}"
+            echo "repo_commit: ${GITHUB_SHA}"
+            echo "repo_ref: ${GITHUB_REF}"
+            echo "workflow: ${GITHUB_WORKFLOW}"
+            echo "run_id: ${GITHUB_RUN_ID}"
+            echo "run_attempt: ${GITHUB_RUN_ATTEMPT}"
+            echo "run_url: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "actor: ${GITHUB_ACTOR}"
+            echo "flavor: ${FLAVOR}"
+            echo "release_channel: ${RELEASE_CHANNEL}"
+            echo "boot_test_status: ${BOOT_TEST_STATUS}"
+            echo "localversion: ${LOCALVERSION}"
+            echo "kernel_release: ${KERNEL_RELEASE}"
+            echo "image_banner: ${IMAGE_BANNER}"
+            echo "image_sha256: ${IMAGE_SHA256}"
+            echo "image_size: ${IMAGE_SIZE}"
+            echo "config_sha256: ${CONFIG_SHA256}"
+            echo "build_timestamp: ${KBUILD_BUILD_TIMESTAMP}"
+            echo "build_timestamp_source: ${BUILD_TIMESTAMP_SOURCE}"
+            echo "build_timestamp_note: ${TIMESTAMP_NOTE}"
+            echo "kbuild_user: ${KBUILD_BUILD_USER}"
+            echo "kbuild_host: ${KBUILD_BUILD_HOST}"
+            echo "ack_repo: ${ACK_REPO_URL}"
+            echo "ack_commit: ${ACK_COMMIT}"
+            echo "ack_description: ${ACK_DESCRIPTION}"
+            echo "defconfig_repo: ${DEFCONFIG_REPO_URL}"
+            echo "defconfig_commit: ${DEFCONFIG_COMMIT}"
+            echo "defconfig_gki_sha256: ${DEFCONFIG_GKI_SHA256}"
+            echo "defconfig_vendor_sha256: ${DEFCONFIG_VENDOR_SHA256}"
+            echo "defconfig_extrawarn_sha256: ${DEFCONFIG_EXRAWARN_SHA256}"
+            echo "sukisu_repo: ${SUKISU_REPO_URL}"
+            echo "sukisu_commit: ${SUKISU_COMMIT}"
+            echo "sukisu_version: ${SUKISU_VERSION}"
+            echo "sukisu_setup_sha256: ${SUKISU_SETUP_SHA256}"
+            echo "susfs_version: ${SUSFS_VERSION}"
+            echo "susfs_upstream_repo: ${SUSFS_UPSTREAM_REPO}"
+            echo "susfs_upstream_commit: ${SUSFS_UPSTREAM_COMMIT}"
+            echo "susfs_patch: ${SUSFS_PATCH}"
+            echo "susfs_patch_sha256: ${SUSFS_PATCH_SHA256}"
+            echo "hide_patch: ${HIDE_PATCH}"
+            echo "hide_patch_sha256: ${HIDE_PATCH_SHA256}"
+            echo "droidspaces_commit: ${DROIDSPACES_COMMIT}"
+            echo "droidspaces_patch_sha256: ${DROIDSPACES_PATCH_SHA256}"
+            echo "toolchain_url: ${NEUTRON_CLANG_URL}"
+            echo "toolchain_sha256: ${NEUTRON_CLANG_SHA256}"
+            echo "antman_sha256: ${NEUTRON_ANTMAN_SHA256}"
+            echo "autofdo_mode: ${AUTOFDO_MODE}"
+            echo "autofdo_patch_sha256: ${AUTOFDO_PATCH_SHA256}"
+            echo "known_limitation: boot image is NOT built or attached by CI; see release notes."
+            echo "packaging: AnyKernel3 zip (recovery installer). No signing key is configured in the build job; release signing is optional and recorded in SIGNING.txt."
+          } > PROVENANCE.txt
+
+          {
+            echo "GNU GENERAL PUBLIC LICENSE Version 2 source offer"
+            echo "================================================="
+            echo "This release distributes Linux kernel binaries built from free software."
+            echo "The complete corresponding source code consists of:"
+            echo ""
+            echo "1) Android Common Kernel (GPL-2.0): ${ACK_REPO_URL} at commit ${ACK_COMMIT}"
+            echo "2) This repository at commit ${GITHUB_SHA} (tag ${RELEASE_TAG}):"
+            echo "   https://github.com/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}"
+            echo "   It contains the exact build workflow, configs, and all patches:"
+            echo "   - SUSFS ${SUSFS_VERSION}: ${SUSFS_PATCH} (sha256 ${SUSFS_PATCH_SHA256})"
+            echo "   - SukiSU hide hooks: ${HIDE_PATCH} (sha256 ${HIDE_PATCH_SHA256})"
+            echo "   - AutoFDO backport: ${AUTOFDO_PATCH} (sha256 ${AUTOFDO_PATCH_SHA256})"
+            echo "   - Droidspaces kABI patch: ${DROIDSPACES_PATCH_URL}"
+            echo "     (sha256 ${DROIDSPACES_PATCH_SHA256}, upstream commit ${DROIDSPACES_COMMIT})"
+            echo "3) SukiSU-Ultra (GPL-2.0): ${SUKISU_REPO_URL} at commit ${SUKISU_COMMIT}"
+            echo "   plus setup.sh (sha256 ${SUKISU_SETUP_SHA256})"
+            echo "4) peridot defconfig (GPL-2.0): ${DEFCONFIG_REPO_URL} at commit ${DEFCONFIG_COMMIT}"
+            echo "5) Build toolchain (LLVM/Clang, Apache-2.0 with LLVM exceptions):"
+            echo "   ${NEUTRON_CLANG_URL} (sha256 ${NEUTRON_CLANG_SHA256})"
+            echo ""
+            echo "Written offer: for at least three years from the release date, the"
+            echo "maintainer will provide the complete corresponding source on request"
+            echo "through the repository issue tracker of ${GITHUB_REPOSITORY}."
+            echo "A machine-readable provenance manifest is attached as PROVENANCE.txt."
+            echo ""
+            echo "The AnyKernel3 installer keeps its own license (anykernel/LICENSE.txt)."
+            echo "The GPL-2.0 text is included in the flashable zip as LICENSE."
+          } > SOURCE-OFFER.txt
+
+          test -s PROVENANCE.txt
+          test -s SOURCE-OFFER.txt
+          sha256sum PROVENANCE.txt SOURCE-OFFER.txt
+
+      - name: Export build metadata for the release job
+        id: export
+        run: |
+          set -euo pipefail
+          {
+            echo "kernel_release=${KERNEL_RELEASE}"
+            echo "build_timestamp=${KBUILD_BUILD_TIMESTAMP}"
+            echo "timestamp_source=${BUILD_TIMESTAMP_SOURCE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Exported: kernel_release=${KERNEL_RELEASE}"
 
       - name: Package AnyKernel3
+        id: package
         run: |
-          DATE=$(date +%Y%m%d)
-          # Variabel shell biasa — bukan $GITHUB_ENV. GITHUB_ENV hanya terlihat
-          # oleh step BERIKUTNYA, jadi sebelumnya ${ZIPPATH} kosong di step ini:
-          # `zip -r9 "" ...` exit 0 dan menulis file tersembunyi `.zip`, step
-          # tampak sukses, tapi tidak ada zip yang di-upload.
-          if [ "${FLAVOR}" = "ack-full" ]; then
-            ZIPNAME="Peridot-Kernel-ACK-SukiSU-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
-          else
-            echo "::error::Unknown FLAVOR '${FLAVOR}'"; exit 1
-          fi
+          set -euo pipefail
+          DATE="${BUILD_DATE}"
+          ZIPNAME="Peridot-Kernel-ACK-SukiSU-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
           ZIPPATH="${GITHUB_WORKSPACE}/${ZIPNAME}"
 
-          echo "ZIPNAME=${ZIPNAME}" >> $GITHUB_ENV
-          echo "ZIPPATH=${ZIPPATH}" >> $GITHUB_ENV
-          echo "RELEASEDATE=${DATE}" >> $GITHUB_ENV
-
-          # AnyKernel3 sudah di-commit di repo ini (folder anykernel/) — pola yang
-          # dipakai workflow Mohithash yang SUKSES (Kernel_F6): tidak ada git clone
-          # saat packaging. Git clone di step ini gagal "exit code 3" di runner
-          # (osm0sis di run #5, fork sendiri di run #6), padahal sama clone sukses
-          # di mesin lokal — jadi sumber masalahnya runner, bukan repo-nya.
           cd anykernel
 
-          # Generate anykernel.sh dengan ASCII banner.
-          # ATURAN: ZERO backslash literal, ZERO dollar ($), ZERO backtick di baris banner.
-          # printf '%s\n' mengoutput setiap arg sebagai satu baris — aman untuk YAML.
-          # Banner: karakter + | / - space huruf angka titik saja. Verified safe.
+          # Generated installer. ASCII banner only (zero backslash/backtick/$ in banner lines).
           printf '%s\n' \
             '# AnyKernel3 Ramdisk Mod Script' \
             '# osm0sis @ xda-developers' \
@@ -427,6 +761,9 @@ jobs:
             'ui_print "+================================================+";' \
             "ui_print \"|   KSU  : ${SUKISU_VERSION}   SUSFS : ${SUSFS_VERSION}   Droidspaces   |\";" \
             'ui_print "+================================================+";' \
+            'ui_print "|  Kernel is UNSIGNED, no AVB footer.            |";' \
+            'ui_print "|  Needs unlocked bootloader / AVB disabled.     |";' \
+            'ui_print "+================================================+";' \
             'ui_print " ";' \
             'split_boot;' \
             'ui_print ">> Flashing Flavenz Kernel...";' \
@@ -439,49 +776,113 @@ jobs:
           bash -n anykernel.sh || { echo "::error::anykernel.sh syntax check failed"; exit 1; }
 
           cp ../kernel/out/arch/arm64/boot/Image ./Image
+          # GPL-2.0 text for the kernel binaries + provenance/source offer must
+          # travel with the flashable zip (the old packaging excluded LICENSE).
+          cp ../LICENSE ./LICENSE
+          cp ../PROVENANCE.txt ./PROVENANCE.txt
+          cp ../SOURCE-OFFER.txt ./SOURCE-OFFER.txt
 
-          zip -r9 "${ZIPPATH}" . -x "*.git*" "LICENSE.txt" > /dev/null
+          rm -f "${ZIPPATH}"
+          zip -r9 "${ZIPPATH}" . -x "*.git*" > /dev/null
           [ -s "${ZIPPATH}" ] || { echo "::error::zip not created: ${ZIPPATH}"; exit 1; }
-          ls -lh "${ZIPPATH}"
-          echo "Successfully created ${ZIPNAME}"
 
-      - name: Upload Kernel Release Artifacts
-        uses: actions/upload-artifact@v4
+          for entry in anykernel.sh LICENSE LICENSE.txt PROVENANCE.txt SOURCE-OFFER.txt Image; do
+            unzip -l "${ZIPPATH}" | grep -q " ${entry}$" \
+              || { echo "::error::${entry} missing from flashable zip"; exit 1; }
+          done
+          # Provenance inside the zip must be byte-identical to the artifact.
+          unzip -p "${ZIPPATH}" PROVENANCE.txt > /tmp/provenance_in_zip.txt
+          cmp -s /tmp/provenance_in_zip.txt PROVENANCE.txt \
+            || { echo "::error::PROVENANCE.txt inside zip differs from build artifact"; exit 1; }
+
+          ZIP_SHA256=$(sha256sum "${ZIPPATH}" | cut -d' ' -f1)
+          {
+            echo "ZIPNAME=${ZIPNAME}"
+            echo "ZIP_SHA256=${ZIP_SHA256}"
+            echo "RELEASEDATE=${DATE}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "zipname=${ZIPNAME}"
+            echo "zip_sha256=${ZIP_SHA256}"
+          } >> "$GITHUB_OUTPUT"
+          ls -lh "${ZIPPATH}"
+          echo "AK3 zip: ${ZIPNAME} sha256=${ZIP_SHA256}"
+
+      - name: Upload kernel release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Peridot-Kernel-${{ matrix.flavor }}-SukiSU-${{ env.RELEASEDATE || 'release' }}
-          path: Peridot-Kernel-*.zip
+          name: Peridot-Kernel-${{ matrix.flavor }}-SukiSU-${{ steps.package.outputs.zipname }}
+          path: |
+            Peridot-Kernel-*.zip
+            PROVENANCE.txt
+            SOURCE-OFFER.txt
           if-no-files-found: error
+          retention-days: 14
 
   release:
-    name: Publish to GitHub Releases
+    name: Prepare GitHub Release (draft by default)
     needs: [build]
-    # release hanya jika job matrix sukses: needs membuat job ini menunggu
-    # SEMUA kombinasi matrix selesai; jika ada yang gagal, job ini tidak jalan.
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    environment:
+      name: release
+      url: ${{ github.server_url }}/${{ github.repository }}/releases
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      FLAVOR: ${{ needs.build.outputs.flavor }}
+      RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+      BUILD_DATE: ${{ needs.build.outputs.build_date }}
+      LOCALVERSION: ${{ needs.build.outputs.localversion }}
+      REPO_SHORT: ${{ needs.build.outputs.repo_short }}
+      ACK_SHORT: ${{ needs.build.outputs.ack_short }}
+      BOOT_TEST_STATUS: ${{ needs.build.outputs.boot_test_status }}
+      KERNEL_RELEASE: ${{ needs.build.outputs.kernel_release }}
+      BUILD_TIMESTAMP: ${{ needs.build.outputs.build_timestamp }}
+      BUILD_TIMESTAMP_SOURCE: ${{ needs.build.outputs.timestamp_source }}
+      CHANNEL: ${{ github.event.inputs.release_channel }}
+      PUBLISH: ${{ github.event.inputs.publish_release }}
+
     steps:
-      - name: Download all built zips
-        uses: actions/download-artifact@v4
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Load pinned inputs
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            case "$line" in
+              ''|'#'*) continue ;;
+            esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            case "$value" in
+              \"*\") value="${value#\"}"; value="${value%\"}" ;;
+            esac
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+          done < configs/pins.env
+          echo "Pins loaded for release job"
+
+      - name: Download built artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Verify zips & prepare release body
+      - name: Verify artifacts and prepare release assets
         env:
-          SUKISU_VER: builtin-1cfa573
-          SUSFS_VER: v2.3.0
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
-          # v4 + merge-multiple sudah mengekstrak isi artifact langsung ke artifacts/
-          # (zip flashable siap di root). Deteksi wrapper TIDAK boleh pakai
-          # `unzip -l | grep '\.zip$'` — baris pertama output unzip -l adalah
-          # "Archive: <path>.zip" sehingga SEMUA zip match dan flashable ikut
-          # terhapus (bug run 34279539210: found 0). Deteksi benar: zip AK3
-          # selalu berisi anykernel.sh; zip yang TIDAK berisi anykernel.sh dianggap
-          # pembungkus dan dibuka.
+          # v4 merge-multiple extracts artifact contents into artifacts/.
+          # Wrapper zip detection: a flashable AK3 zip always contains anykernel.sh.
           shopt -s nullglob
           for f in artifacts/*.zip; do
             if unzip -l "$f" | grep -q 'anykernel.sh'; then
@@ -496,64 +897,421 @@ jobs:
             rm -rf "$d"
           done
           shopt -u nullglob
-          echo "=== zip flashable di artifacts/ ==="
-          ls -lh artifacts/
-          COUNT=$(find artifacts -maxdepth 1 -name 'Peridot-Kernel-*.zip' | wc -l)
-          if [ "${COUNT}" -ne 1 ]; then
+
+          cd artifacts
+          COUNT=$(find . -maxdepth 1 -name 'Peridot-Kernel-*.zip' | wc -l)
+          if [ "$COUNT" -ne 1 ]; then
             echo "::error::expected exactly 1 flashable zip, found ${COUNT}"; exit 1
           fi
-          cd artifacts
-          # checksum untuk verifikasi integritas sebelum flash
-          sha256sum Peridot-Kernel-*.zip > SHA256SUMS.txt
-          # tanggal build diambil dari nama zip → dipakai sebagai tag release
-          DATE=$(ls Peridot-Kernel-*-droidspaces-*.zip | head -n1 | grep -oE '[0-9]{8}' | tail -n1)
-          echo "REL_TAG=Flavenz-${DATE}" >> "$GITHUB_ENV"
-          {
-            echo "REL_BODY<<RELEASE_EOF"
-            echo "## Flavenz Kernel for POCO F6 (Peridot) — build ${DATE}"
-            echo ""
-            echo "Satu zip flashable AnyKernel3 (ack-full):"
-            echo ""
-            echo "| Flavor | Base |"
-            echo "|---|---|"
-            echo "| \`ack-full\` | ACK android14-6.1 @ \`0c3d559bcd85\` + defconfig Mohithash |"
-            echo ""
-            echo "### Isi (tanpa zip dalam zip — langsung flashable)"
-            echo "- \`${SUKISU_VER}\` SukiSU-Ultra builtin (pinned 1cfa573, builtin branch) + upstream SUSFS + SUSFS v2.3.0"
-            echo "- SUSFS \`${SUSFS_VER}\`"
-            echo "- Droidspaces kABI-safe support (MACVLAN, IPv6 NAT, Namespaces, SYSVIPC, memcg)"
-            echo "- \`SHA256SUMS.txt\` tersedia untuk verifikasi integritas"
-            echo ""
-            echo "### Peringatan"
-            echo "> Project pribadi, AS-IS tanpa garansi. Segala kesalahan/error/kerusakan"
-            echo "> sistem adalah tanggung jawab masing-masing. Keamanan belum dapat"
-            echo "> dipastikan. Backup boot & init_boot sebelum flash."
-            echo ""
-            echo "### Cara flash"
-            echo "1. Download SATU zip flavor di bawah (tidak perlu diekstrak lagi)"
-            echo "2. (Disarankan) Reboot ke OS dulu, lalu kembali ke recovery — agar \`/apex\` tidak ter-mount dari system"
-            echo "3. Flash via TWRP/OrangeFox/NEBULA → Wipe Dalvik/Cache → Reboot"
-            echo ""
-            echo "CI run: ${RUN_URL}"
-            echo "RELEASE_EOF"
-          } >> "$GITHUB_ENV"
+          ZIP=$(ls Peridot-Kernel-*.zip)
 
-      - name: Publish GitHub Release
+          # Release policy: no boot image ever gets attached by CI.
+          if find . -maxdepth 1 \( -iname '*boot*.img' -o -iname '*.img' \) -print -quit | grep -q .; then
+            echo "::error::boot/image assets must not be attached to a release (unsigned/no AVB, see README)"; exit 1
+          fi
+
+          # Provenance must be present as an artifact AND inside the zip, identical.
+          test -f PROVENANCE.txt || { echo "::error::PROVENANCE.txt artifact missing"; exit 1; }
+          unzip -p "$ZIP" PROVENANCE.txt > /tmp/provenance_in_zip.txt
+          cmp -s /tmp/provenance_in_zip.txt PROVENANCE.txt \
+            || { echo "::error::PROVENANCE.txt differs between zip and artifact"; exit 1; }
+          grep -q "^release_tag: ${RELEASE_TAG}$" PROVENANCE.txt \
+            || { echo "::error::provenance release_tag does not match ${RELEASE_TAG}"; exit 1; }
+          grep -q '^format: flavenz-kernel-provenance-v1$' PROVENANCE.txt
+
+          # LICENSE and source-offer must be inside the flashable zip (GPL).
+          for entry in LICENSE anykernel.sh SOURCE-OFFER.txt Image; do
+            unzip -l "$ZIP" | grep -q " ${entry}$" \
+              || { echo "::error::${entry} missing from flashable zip (GPL/packaging)"; exit 1; }
+          done
+
+          # Image inside the zip must match the provenance hash.
+          unzip -p "$ZIP" Image > /tmp/Image_from_zip
+          IMAGE_FROM_ZIP_SHA=$(sha256sum /tmp/Image_from_zip | cut -d' ' -f1)
+          PROV_IMAGE_SHA=$(grep '^image_sha256: ' PROVENANCE.txt | awk '{print $2}')
+          [ "$IMAGE_FROM_ZIP_SHA" = "$PROV_IMAGE_SHA" ] \
+            || { echo "::error::Image sha256 in zip (${IMAGE_FROM_ZIP_SHA}) != provenance (${PROV_IMAGE_SHA})"; exit 1; }
+
+          # Repo source snapshot (our build scripts/patches/configs) as an asset.
+          SRC_TARBALL="Flavenz-Kernel-source-${REPO_SHORT}.tar.gz"
+          git -C "$GITHUB_WORKSPACE" archive --format=tar.gz \
+            --prefix="Flavenz-Kernel-${RELEASE_TAG}/" -o "$GITHUB_WORKSPACE/artifacts/${SRC_TARBALL}" HEAD
+
+          # Decide signing status up front. SIGNING.txt is written before the
+          # checksums (so it is covered by SHA256SUMS.txt); a failed signature
+          # aborts this step, so the release can never claim a signature that
+          # does not exist.
+          SIGNING_PLANNED="false"
+          SIGNED_ASSET=""
+          if [ -n "${RELEASE_GPG_PRIVATE_KEY:-}" ]; then
+            SIGNING_PLANNED="true"
+            SIGNING_STATUS="SIGNED (GPG detached signature of SHA256SUMS.txt)"
+          else
+            SIGNING_STATUS="UNSIGNED"
+          fi
+
+          {
+            echo "Signing status: ${SIGNING_STATUS}"
+            echo ""
+            if [ "$SIGNING_PLANNED" = "true" ]; then
+              echo "Verify with:"
+              echo "  gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt"
+              echo "  sha256sum -c SHA256SUMS.txt"
+            else
+              echo "This release is NOT cryptographically signed by the maintainer:"
+              echo "  * SHA256SUMS.txt only proves transport integrity, not authorship."
+              echo "  * PROVENANCE.txt records the exact workflow run, commits and input hashes."
+              echo "  * Immutable releases / tag protection must be enabled in repo settings."
+              echo "Do not treat these assets as signed artifacts."
+            fi
+            echo ""
+            echo "Full provenance: PROVENANCE.txt"
+            echo "GPL-2.0 source offer: SOURCE-OFFER.txt"
+          } > SIGNING.txt
+
+          # Checksums over every published asset (generated here, after every
+          # file is final: zip, provenance, source offer, signing note, tarball).
+          rm -f SHA256SUMS.txt SHA256SUMS.txt.asc
+          sha256sum "$ZIP" PROVENANCE.txt SOURCE-OFFER.txt SIGNING.txt "$SRC_TARBALL" > SHA256SUMS.txt
+
+          if [ "$SIGNING_PLANNED" = "true" ]; then
+            echo "GPG key configured - signing SHA256SUMS.txt"
+            printf '%s' "$RELEASE_GPG_PRIVATE_KEY" | gpg --batch --import >/dev/null 2>&1
+            if [ -n "${RELEASE_GPG_PASSPHRASE:-}" ]; then
+              gpg --batch --yes --armor --detach-sign \
+                --pinentry-mode loopback --passphrase "$RELEASE_GPG_PASSPHRASE" SHA256SUMS.txt
+            else
+              gpg --batch --yes --armor --detach-sign --pinentry-mode loopback SHA256SUMS.txt
+            fi
+            test -s SHA256SUMS.txt.asc || { echo "::error::GPG signing produced no signature"; exit 1; }
+            gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+            SIGNED_ASSET="SHA256SUMS.txt.asc"
+            echo "Signed: SHA256SUMS.txt.asc"
+          else
+            echo "No RELEASE_GPG_PRIVATE_KEY secret configured - release is explicitly UNSIGNED"
+          fi
+
+          # Local pre-flight verification before anything leaves the runner.
+          bash -n "$GITHUB_WORKSPACE/scripts/ci/verify-release.sh"
+          bash "$GITHUB_WORKSPACE/scripts/ci/verify-release.sh" "$PWD"
+
+          {
+            echo "ASSET_ZIP=${ZIP}"
+            echo "ASSET_SOURCE_TARBALL=${SRC_TARBALL}"
+            echo "SIGNING_STATUS=${SIGNING_STATUS}"
+            echo "SIGNED_ASSET=${SIGNED_ASSET}"
+          } >> "$GITHUB_ENV"
+          echo "Prepared release assets:"
+          ls -lh
+
+      - name: Release pre-flight (tag/immutability/environment checks)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 1) Tag must not exist. CI never deletes or recreates tags/releases.
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::release/tag ${RELEASE_TAG} already exists. Refusing to delete or overwrite it. Re-run the workflow (a new run number produces a new tag)."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" > /dev/null 2>&1; then
+            echo "::error::git tag ${RELEASE_TAG} already exists; refusing to reuse it"
+            exit 1
+          fi
+
+          # 2) Immutable releases are a repo setting; report the real state.
+          IMMUTABLE_STATUS="unknown (API unavailable)"
+          if IMMUTABLE_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" 2>/dev/null); then
+            if printf '%s' "$IMMUTABLE_JSON" | grep -q '"enabled":true'; then
+              IMMUTABLE_STATUS="enabled"
+            else
+              IMMUTABLE_STATUS="disabled"
+              echo "::warning::GitHub immutable releases are DISABLED for this repo. Enable Settings -> General -> Releases -> 'Enable immutable releases' and add a tag protection rule for Flavenz-*."
+            fi
+          else
+            echo "::warning::could not query immutable-releases API; verify the repo setting manually."
+          fi
+          echo "RELEASE_IMMUTABLE=${IMMUTABLE_STATUS}" >> "$GITHUB_ENV"
+
+          # 3) Publishing a public release requires an approved protected environment.
+          if [ "$PUBLISH" = "true" ]; then
+            PROT=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release" --jq '.protection_rules | length' 2>/dev/null || echo "unknown")
+            if [ "$PROT" = "0" ]; then
+              echo "::error::environment 'release' has no protection rules. Configure required reviewers before using publish_release=true."
+              exit 1
+            fi
+            if [ "$PROT" = "unknown" ]; then
+              echo "::warning::could not verify protection rules for environment 'release'; confirm required reviewers manually."
+            fi
+          fi
+
+          # 4) Honest channel rules.
+          if [ "$CHANNEL" = "stable" ] && [ "$PUBLISH" = "true" ] && [ "$BOOT_TEST_STATUS" != "boot-tested" ]; then
+            echo "::error::refusing to publish a STABLE release whose boot_test_status is '${BOOT_TEST_STATUS}'"
+            exit 1
+          fi
+          if [ "$CHANNEL" = "exp" ]; then
+            echo "exp channel: release is always created with --prerelease"
+          fi
+          echo "Pre-flight OK (tag free, immutable=${IMMUTABLE_STATUS}, channel=${CHANNEL}, publish=${PUBLISH})"
+
+      - name: Write release notes body
+        run: |
+          set -euo pipefail
+          cat > release_body_template.md <<'RELEASE_BODY_EOF'
+          ## Flavenz Kernel for Redmi Turbo 3 / POCO F6 (`peridot`) — @TAG@
+
+          @STATE_LINE@
+
+          | Item | Value |
+          |---|---|
+          | Release tag | `@TAG@` |
+          | Channel | `@CHANNEL@` |
+          | Repo commit | `@REPO_COMMIT@` |
+          | Kernel base | ACK `android14-6.1-lts` @ `@ACK_COMMIT@` (`@ACK_DESCRIPTION@`) |
+          | Defconfig | `Mohithash/kernel_xiaomi_sm8635` @ `@DEFCONFIG_COMMIT@` (sha256-pinned files) |
+          | Root | SukiSU-Ultra builtin `@SUKISU_COMMIT@` (`@SUKISU_VERSION@`), setup.sh sha256 `@SUKISU_SETUP_SHA256@` |
+          | Hiding | SUSFS `@SUSFS_VERSION@` (upstream `@SUSFS_UPSTREAM_COMMIT@`), exact-rebased patch sha256 `@SUSFS_PATCH_SHA256@` |
+          | Toolchain | Neutron Clang 30062026, sha256 `@NEUTRON_SHA256@` (+ antman sha256 `@ANTMAN_SHA256@`) |
+          | Droidspaces kABI patch | `@DROIDSPACES_COMMIT@`, sha256 `@DROIDSPACES_PATCH_SHA256@` |
+          | Version string | `@KERNEL_RELEASE@` |
+          | Build timestamp | `@BUILD_TIMESTAMP@` (@TIMESTAMP_SOURCE_TEXT@) |
+          | Boot test | `@BOOT_TEST_STATUS@` |
+          | Signing | @SIGNING_STATUS@ |
+          | Immutable releases | @IMMUTABLE_STATUS@ |
+
+          ### Assets
+
+          | Asset | Purpose |
+          |---|---|
+          | `@ZIP@` | AnyKernel3 flashable zip (kernel + GPL-2.0 text + provenance + source offer) |
+          | `SHA256SUMS.txt` | sha256 of every asset below (verify with `sha256sum -c SHA256SUMS.txt`) |
+          @SIGNED_ASSET_LINE@
+          | `PROVENANCE.txt` | exact commits, input hashes, kernel release, Image sha256, workflow run URL |
+          | `SOURCE-OFFER.txt` | GPL-2.0 written offer + exact source locations |
+          | `@SRC_TARBALL@` | this repository (workflow/configs/patches) at the release commit |
+
+          **This release does NOT contain a boot image (`boot.img`).** CI only builds and
+          ships the AnyKernel3 zip. Do not expect to `fastboot flash` an attached image.
+
+          ### GPL / source code
+
+          Kernel binaries are GPL-2.0. The flashable zip includes the GPL-2.0 text
+          (`LICENSE`). Complete corresponding source = ACK `@ACK_COMMIT@` + this repo at
+          `@REPO_COMMIT@` + SukiSU-Ultra `@SUKISU_COMMIT@` + peridot defconfig
+          `@DEFCONFIG_COMMIT@` + the patches listed in `PROVENANCE.txt`.
+          Details and the written offer are in `SOURCE-OFFER.txt`.
+
+          ### Flashing — read this first
+
+          - **No custom recovery is available on the current peridot port (OS4 / Android 17)**
+            as of 2026-11-07: there is no working TWRP/OrangeFox/NEBULA for it. The
+            AnyKernel3 zip still requires a custom recovery, so the "flash from recovery"
+            path is **currently not usable on this ROM**.
+          - **Boot image is unsigned and has no valid AVB footer.** The kernel `Image`
+            inside the zip can be repacked into a stock `boot.img` header
+            (`scripts/repack_boot.py`) but the result is not signed for this device's
+            AVB. It only boots with an unlocked bootloader and AVB/verity disabled (or a
+            vbmeta policy that accepts it). Flashing an unsigned boot on an
+            AVB-enforcing setup can fail verification and bootloop.
+          - `fastboot boot <image>` is a **RAM-only test** and is rejected by some Xiaomi
+            bootloaders. It is not a rollback mechanism.
+          - The device is A/B. `fastboot flash boot` writes the active slot; to restore
+            both slots explicitly use `fastboot flash boot_a <stock.img>` and
+            `fastboot flash boot_b <stock.img>` (same for `init_boot`).
+          - If you previously rooted via LKM (patched `init_boot`), restore the stock
+            `init_boot` before using this builtin-SukiSU kernel; LKM + builtin may conflict.
+          - Recommended path: back up `boot`, `init_boot`, `vendor_boot` to a PC (not only
+            `/sdcard`), test with `fastboot boot` if your bootloader allows it, then
+            `fastboot flash boot` after confirming boot/Wi-Fi/camera/charging.
+          - Rollback: `fastboot flash boot <stock_boot.img>` (and `init_boot` if changed).
+            `fastboot boot` is not a rollback.
+
+          ### Integrity
+
+          1. `sha256sum -c SHA256SUMS.txt`
+          2. If `SHA256SUMS.txt.asc` is present: `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt`
+          3. Read `PROVENANCE.txt` for the exact commits/hashes and CI run URL.
+          4. If the release is marked UNSIGNED, checksums only prove transport integrity —
+             they do not prove authorship.
+
+          ### Known limitations
+
+          - KPM is not enabled (KernelPatch-patched images do not boot on peridot + ported OS4).
+          - SUSFS cannot hide the manager package name; pair it with HMA etc.
+          - Play Integrity / GMS behavior depends on the ported ROM itself.
+          - Ported ROM vendor/ODM is an Android 14 base under an Android 17 system; issues
+            specific to that mix are ROM-side.
+
+          > Personal, unofficial, AS-IS build without warranty. Flashing carries risk
+          > (brick, data loss). You are responsible for your own device.
+
+          CI run: @RUN_URL@
+          RELEASE_BODY_EOF
+
+          # Substitute placeholders with real values from the environment (Python
+          # keeps values verbatim; no sed/& pitfalls, no command substitution).
+          python3 - <<'PY'
+          import os
+          import pathlib
+
+          mapping = {
+              "TAG": os.environ["RELEASE_TAG"],
+              "CHANNEL": os.environ["CHANNEL"],
+              "REPO_COMMIT": os.environ["GITHUB_SHA"],
+              "ACK_COMMIT": os.environ["ACK_COMMIT"],
+              "ACK_DESCRIPTION": os.environ["ACK_DESCRIPTION"],
+              "DEFCONFIG_COMMIT": os.environ["DEFCONFIG_COMMIT"],
+              "SUKISU_COMMIT": os.environ["SUKISU_COMMIT"],
+              "SUKISU_VERSION": os.environ["SUKISU_VERSION"],
+              "SUKISU_SETUP_SHA256": os.environ["SUKISU_SETUP_SHA256"],
+              "SUSFS_VERSION": os.environ["SUSFS_VERSION"],
+              "SUSFS_UPSTREAM_COMMIT": os.environ["SUSFS_UPSTREAM_COMMIT"],
+              "SUSFS_PATCH_SHA256": os.environ["SUSFS_PATCH_SHA256"],
+              "NEUTRON_SHA256": os.environ["NEUTRON_CLANG_SHA256"],
+              "ANTMAN_SHA256": os.environ["NEUTRON_ANTMAN_SHA256"],
+              "DROIDSPACES_COMMIT": os.environ["DROIDSPACES_COMMIT"],
+              "DROIDSPACES_PATCH_SHA256": os.environ["DROIDSPACES_PATCH_SHA256"],
+              "KERNEL_RELEASE": os.environ["KERNEL_RELEASE"],
+              "BUILD_TIMESTAMP": os.environ["BUILD_TIMESTAMP"],
+              "BOOT_TEST_STATUS": os.environ["BOOT_TEST_STATUS"],
+              "SIGNING_STATUS": os.environ.get("SIGNING_STATUS", "UNSIGNED"),
+              "IMMUTABLE_STATUS": os.environ.get("RELEASE_IMMUTABLE", "unknown"),
+              "ZIP": os.environ["ASSET_ZIP"],
+              "SRC_TARBALL": os.environ["ASSET_SOURCE_TARBALL"],
+              "SIGNED_ASSET_LINE": (
+                  "| `SHA256SUMS.txt.asc` | GPG detached signature of SHA256SUMS.txt |"
+                  if os.environ.get("SIGNED_ASSET")
+                  else "| (no signature) | release is explicitly UNSIGNED, see `SIGNING.txt` |"
+              ),
+              "RUN_URL": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }
+
+          if os.environ["BUILD_TIMESTAMP_SOURCE"] == "rom_synced_explicit":
+              mapping["TIMESTAMP_SOURCE_TEXT"] = "explicitly synced to ROM ro.build.date, disclosed"
+          else:
+              mapping["TIMESTAMP_SOURCE_TEXT"] = "source commit date"
+
+          if os.environ["PUBLISH"] == "true":
+              state_line = "**Published release** — approved via the protected `release` environment."
+          elif os.environ["CHANNEL"] == "exp":
+              state_line = "**DRAFT prerelease** — created by CI as a draft; a maintainer must review and publish it."
+          else:
+              state_line = "**DRAFT release** — created by CI as a draft; a maintainer must review and publish it."
+          mapping["STATE_LINE"] = state_line
+
+          template = pathlib.Path("release_body_template.md").read_text(encoding="utf-8")
+          for key, value in mapping.items():
+              template = template.replace(f"@{key}@", value)
+          pathlib.Path("release_body.md").write_text(template, encoding="utf-8")
+          print("release_body.md written")
+          PY
+          rm -f release_body_template.md
+          test -s release_body.md
+          head -n 12 release_body.md
+
+      - name: Create GitHub Release (draft by default; never delete/recreate tags)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd artifacts
-          if gh release view "${REL_TAG}" -R "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
-            echo "Release ${REL_TAG} sudah ada — hapus dulu supaya isi terbaru"
-            gh release delete "${REL_TAG}" -R "${GITHUB_REPOSITORY}" --yes --cleanup-tag
+          ASSETS=(
+            "$ASSET_ZIP"
+            PROVENANCE.txt
+            SOURCE-OFFER.txt
+            SHA256SUMS.txt
+            SIGNING.txt
+            "$ASSET_SOURCE_TARBALL"
+          )
+          if [ -n "${SIGNED_ASSET:-}" ]; then
+            ASSETS+=("$SIGNED_ASSET")
           fi
-          gh release create "${REL_TAG}" \
-            -R "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --title "Flavenz Kernel Peridot — ${REL_TAG}" \
-            --notes-file <(echo "${REL_BODY}") \
-            Peridot-Kernel-*.zip SHA256SUMS.txt
-          echo "=== release terbit ==="
-          gh release view "${REL_TAG}" -R "${GITHUB_REPOSITORY}" --json name,tagName,assets \
-            --jq '"\(.name) [\(.tagName)] assets: " + ([.assets[].name] | join(", "))'
+
+          FLAGS=(
+            -R "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "Flavenz Kernel Peridot — ${RELEASE_TAG}"
+            --notes-file "$GITHUB_WORKSPACE/release_body.md"
+          )
+          if [ "$PUBLISH" != "true" ]; then
+            FLAGS+=(--draft)
+          fi
+          if [ "$CHANNEL" = "exp" ]; then
+            # exp builds are ALWAYS prereleases, never "Latest".
+            FLAGS+=(--prerelease)
+          fi
+
+          echo "Creating ${RELEASE_TAG} (draft=$([ "$PUBLISH" != "true" ] && echo yes || echo no), prerelease=$([ "$CHANNEL" = exp ] && echo yes || echo no))"
+          gh release create "$RELEASE_TAG" "${FLAGS[@]}" "${ASSETS[@]}"
+
+          gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json name,tagName,isDraft,isPrerelease,assets \
+            --jq '"\(.name) [\(.tagName)] draft=\(.isDraft) prerelease=\(.isPrerelease) assets: " + ([.assets[].name] | join(", "))'
+
+      - name: Verify uploaded assets (server-side sha256 + release state)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "=== release state ==="
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > /tmp/release.json
+          PUBLISH="$PUBLISH" CHANNEL="$CHANNEL" python3 - <<'PY'
+          import json
+          import os
+
+          with open("/tmp/release.json", encoding="utf-8") as fh:
+              data = json.load(fh)
+          want_draft = os.environ["PUBLISH"] != "true"
+          want_pre = os.environ["CHANNEL"] == "exp"
+          assert data["draft"] == want_draft, "draft=%s expected %s" % (data["draft"], want_draft)
+          assert data["prerelease"] == want_pre, "prerelease=%s expected %s" % (data["prerelease"], want_pre)
+          print("state OK: tag=%s draft=%s prerelease=%s" % (data["tag_name"], data["draft"], data["prerelease"]))
+          PY
+
+          echo "=== asset digests (server-side) ==="
+          cd artifacts
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            --jq '.assets[] | [.name, (.digest // "null")] | @tsv' > /tmp/uploaded_assets.tsv
+          cat /tmp/uploaded_assets.tsv
+          MISSING=0
+          while IFS=$'\t' read -r name digest; do
+            if [ ! -f "$name" ]; then
+              echo "::error::asset ${name} missing locally"; MISSING=1; continue
+            fi
+            expected="sha256:$(sha256sum "$name" | cut -d' ' -f1)"
+            if [ "$digest" = "null" ]; then
+              echo "::warning::server did not report a digest for ${name}; will verify by download"
+            elif [ "$digest" != "$expected" ]; then
+              echo "::error::server digest mismatch for ${name}: ${digest} != ${expected}"; MISSING=1
+            fi
+          done < /tmp/uploaded_assets.tsv
+          [ "$MISSING" = 0 ] || exit 1
+
+          # Fallback full verification by download (also covers digest=null).
+          if grep -q $'\tnull$' /tmp/uploaded_assets.tsv; then
+            rm -rf /tmp/downloaded_assets && mkdir -p /tmp/downloaded_assets
+            gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" -D /tmp/downloaded_assets
+            bash "$GITHUB_WORKSPACE/scripts/ci/verify-release.sh" /tmp/downloaded_assets
+          fi
+
+          # Re-verify the local asset set one last time.
+          bash "$GITHUB_WORKSPACE/scripts/ci/verify-release.sh" "$PWD"
+          echo "=== release assets verified ==="
+
+      - name: Publish summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### Flavenz release ${RELEASE_TAG}"
+            echo ""
+            echo "- Draft: $([ "$PUBLISH" != "true" ] && echo yes || echo no)"
+            echo "- Prerelease: $([ "$CHANNEL" = exp ] && echo yes || echo no)"
+            echo "- Signing: ${SIGNING_STATUS}"
+            echo "- Immutable releases: ${RELEASE_IMMUTABLE}"
+            echo "- Boot test status: ${BOOT_TEST_STATUS}"
+            echo "- Tag: ${RELEASE_TAG}"
+            echo ""
+            if [ "$PUBLISH" != "true" ]; then
+              echo "Nothing is public yet: the release is a draft. Review it in the GitHub UI and publish manually (or re-run with publish_release=true after environment approval)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

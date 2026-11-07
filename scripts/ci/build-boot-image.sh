@@ -3,6 +3,11 @@
 # scripts/ci/build-boot-image.sh
 # Repack Image (ack-full) -> fla-boot.img untuk BOOT-TEST (fastboot boot, RAM-only)
 #
+# !!! PENTING (2026-11-07): hasil script ini BUKAN release asset dan image-nya
+# !!! TIDAK ditandatangani serta TIDAK punya AVB footer yang valid untuk device
+# !!! ini. Hanya untuk uji RAM (`fastboot boot`) / flash manual dengan
+# !!! bootloader unlocked + AVB/verity disabled. Lihat README "Flashing".
+# !
 # Tahap 1 roadmap boot-test (kernel-riset.md §2): mencegah asset tidak-teruji
 # masuk Release (pelajaran kasus Guidix 2026-09-13). fla-boot.img = header
 # boot.img STOCK (backup user) + payload kernel diganti Image build kita.
@@ -150,11 +155,18 @@ verify_image() {
   # Banner uname via tr (portable, tanpa binutils strings)
   VER=$(tr -c '[:print:]' '\n' < "$img" | grep -m1 '^Linux version' || true)
   [ -n "$VER" ] || fail "banner 'Linux version' tidak ditemukan di Image"
-  echo "$VER" | grep -q '^Linux version 6\.1\.138-android14-11' \
-    || fail "uname Image bukan base GKI 6.1.138-android14-11: '${VER}'"
-  # Catatan: suffix commit (mis. ga3b9c44908dd-ab13320413+) boleh berbeda dari
-  # stock — ini banner Image PROVEN kita (boot-verified ROM user), bukan stock.
-  # Yang dipatok keras: sublevel 6.1.138 (keputusan matriks kernel-riset §7).
+  echo "$VER" | grep -q '^Linux version 6\.1\.138' \
+    || fail "uname Image bukan base GKI 6.1.138: '${VER}'"
+  # Version honesty (2026-11-07): CI builds carry an explicit, traceable
+  # LOCALVERSION ("-flavenz-<date>-<flavor>-g<ack>-<repo>"), never the vendor's
+  # spoofed "-android14-11-ga3b9c44908dd-ab13320413" or a GMS uname override.
+  echo "$VER" | grep -q -- '-flavenz-' \
+    || fail "uname Image tidak membawa LOCALVERSION jujur '-flavenz-...': '${VER}' (build lama/spoof?)"
+  if echo "$VER" | grep -q '6\.1\.118-android14-11-ga3b9c44908dd-ab13320413'; then
+    fail "uname Image masih memakai string spoof lama (UNAME_OVERRIDE/GMS): '${VER}'"
+  fi
+  # Catatan: suffix commit ACK boleh berbeda dari stock — yang dipatok keras:
+  # sublevel 6.1.138 + honest LOCALVERSION di atas.
   log "Image OK (${size} byte): ${VER}"
 }
 
@@ -324,6 +336,16 @@ stage_out() {
     echo "1. Download artifact ini, ekstrak zip Actions (artifact selalu dibungkus zip)"
     echo "2. Reboot ke bootloader, lalu:  fastboot boot ${name}.img"
     echo "3. Catat hasil: uname -r, uptime, apakah ada panic/reboot sendiri"
+    echo ""
+    echo "!!! BATASAN PENTING !!!"
+    echo "- File ini TIDAK ditandatangani dan TIDAK memiliki AVB footer yang valid"
+    echo "  untuk peridot. Jangan dianggap image release/signed."
+    echo "- Hanya untuk RAM test atau flash manual pada bootloader unlocked dengan"
+    echo "  AVB/verity disabled. Boot image unsigned bisa gagal verifikasi -> bootloop."
+    echo "- Ukuran 96 MiB / zero-pad berasal dari header boot.img stock (partisi boot"
+    echo "  96 MiB, magiskboot mempertahankan ukuran/header); itu normal, bukan bug."
+    echo "- Script build-droidspaces.yml TIDAK mem-build/melampirkan boot image ke"
+    echo "  release; file ini hanya hasil script manual/workflow build-image.yml."
     echo ""
     echo "Jika bootloader Xiaomi memblokir 'fastboot boot':"
     echo "  fallback slot nonaktif + fastboot set_active (reversible, TAPI menyentuh"

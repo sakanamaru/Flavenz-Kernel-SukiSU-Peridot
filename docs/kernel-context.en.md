@@ -1,17 +1,30 @@
 # Kernel Build Context — Peridot (POCO F6)
 
+> [!WARNING]
+> **DOCUMENT STATUS (2026-11-07):** this file is a research/history log up to 2026-10.
+> The **current** pipeline, versions and release flow live in [README.md](../README.md),
+> [README.en.md](../README.en.md), [`configs/pins.env`](../configs/pins.env) and [CHANGELOG.md](../CHANGELOG.md).
+> Since 2026-11-07: build inputs are pinned (commit+sha256), patches apply exactly (no fuzz),
+> `uname` is honest (`-flavenz-...`, no UNAME_OVERRIDE/GMS spoof), releases are drafts with unique tags.
+> Legacy entries below are kept as history, not as the current pipeline truth.
+
+
 > English translation of kernel-context.md (Bahasa Indonesia, canonical).
 > Update both files together on every change.
 
 ## Device Info
 - **Device**: Xiaomi POCO F6 / Redmi Turbo 3 (codename: peridot)
 - **Chipset**: Snapdragon 8s Gen 3 (SM8635)
-- **ROM**: Port of the Redmi Turbo 3 / nezha vendor, HyperOS 3
-- **Android**: 16 (API 36)
-- **Fingerprint**: `Redmi/peridot/peridot:14/UKQ1.240624.001/OS3.0.310.0.WNPCNXM`
+- **ROM (verified 2026-11)**: port OS4.0.25.0, Android 17 (SDK 37); vendor/ODM remains an Android 14 base
+  (historical: HyperOS 3 port / Android 16 API 36)
+- **Android**: 17 (SDK 37)
+- **Fingerprint**: `Redmi/peridot/peridot:17/OS4.0.25.0.XEOCNXM`
+- **Build**: `CP2A.260605.016`
 
 ## Stock Kernel Info
-- **Kernel string**: `6.1.138-android14-11-g0c3d559bcd85-ab14529422`
+- **Kernel string (current, 2026-11-07+)**: `6.1.138-flavenz-<YYYYMMDD>-<flavor>-g0c3d559bcd85-<repo7>`
+  (honest LOCALVERSION from CI; the old vendor string `-android14-11-ga3b9c44908dd-ab13320413`
+  and the GMS uname override are removed)
 - **Commit prefix**: `0c3d559bcd85`
 - **Stock toolchain**: AOSP clang 17.0.2 r487747c + PGO + BOLT + LTO
 - **Build date**: Wed Dec 3 02:05:30 UTC 2025
@@ -23,7 +36,7 @@
 ## Build Goals
 - Kernel close to stock + Droidspaces for gaming
 - **Do not use** the Theettam kernel (BORE, ADIOS, BBRv3 etc. = unwanted performance tweaks)
-- Root: KernelSU Next 5dfc3359 (pershoot dev-susfs pin)
+- Root: **SukiSU-Ultra builtin** @ `1cfa57340590971cba7521ed536da8ebbedc5f0a` (see `configs/pins.env`; KernelSU Next is history only)
 - Priorities: gaming performance + Droidspaces container
 
 ## Kernel Base Research
@@ -88,10 +101,10 @@ CONFIG_KALLSYMS=y / CONFIG_KALLSYMS_ALL=y
 ## Current Workflow Flow (build-droidspaces.yml)
 - **Trigger**: `workflow_dispatch` (manual, Actions → Run workflow)
 - **Matrix of 1 job** (`fail-fast: false`) — since 2026-09-13:
-  1. **ack-full** — clone ACK `kernel/common` @ `0c3d559bcd85` + defconfig from `Mohithash/kernel_xiaomi_sm8635` (dynamic branch fallback: `17` → `main` → `theettam-2.8` → `theettam-2.7`)
+  1. **ack-full** — clone ACK `kernel/common` @ `0c3d559bcd85` + defconfig `Mohithash/kernel_xiaomi_sm8635` **commit `690024ef` (pinned, per-file sha256; the branch fallback is gone since 2026-11-07)**
   - ~~**guidix-full** — clone `GuidixX/kernel_xiaomi_sm8635` branch `16.2`~~ → **REMOVED 2026-09-13**: bootlooped on-device after flashing the Guidix zip (recovery restored boot/dtbo/init_boot/vendor_boot from backup + re-flashed the NexiunOS ROM — device saved). Guidix zips deleted from all Releases.
-- Common steps: free disk space → install dependencies (bc, bison, flex, libssl, cpio, pahole, lz4, zstd, gcc-aarch64-linux-gnu, etc.) → setup Neutron Clang 30062026 + antman glibc patch → apply Droidspaces & container configs → apply kABI SYSVIPC patch → setup KernelSU Next 5dfc3359 (pershoot dev-susfs pinned commit) → setup SUSFS v2.3.0 (patches/susfs vendored, fail-hard) → build (`gki_defconfig` [+ `vendor/peridot_GKI.config`], `Image Image.gz dtbs`) → **Package AnyKernel3** → upload artifact
-- Output: artifact per run + **automatic `release` job** — after the matrix job succeeds, the raw flashable zip + `SHA256SUMS.txt` are published as **GitHub Releases** assets (tag `Flavenz-YYYYMMDD`) with full notes; no zip-in-zip (release assets are never wrapped, unlike Actions artifacts)
+- Common steps (2026-11-07+): load `configs/pins.env` + verify every sha256 → free disk → install deps → setup Neutron Clang 30062026 (sha256 verified) + antman (sha256 verified) → clone pinned ACK + checkout → pinned defconfig (commit + 3 file sha256) → apply Droidspaces & container configs → kABI SYSVIPC patch (pinned commit + sha256, exact `git apply --check`, no `|| echo`) → SukiSU setup.sh download + sha256 + run with the full commit (never `curl | bash`) → vendored SUSFS (sha256 + exact `git apply`, no fuzz) → hide hooks patch (exact) → **enforce honest LOCALVERSION / disable UNAME_OVERRIDE** → build (`gki_defconfig` [+ `vendor/peridot_GKI.config`], `Image Image.gz dtbs`) with version/banner gates → generate PROVENANCE + SOURCE-OFFER → **Package AnyKernel3 (GPL LICENSE included)** → upload artifact
+- Output: artifact per run + **`release` job** — since 2026-11-07 releases are **DRAFT** by default; unique tag `Flavenz-<date>-<flavor>-<repo7>-g<ack12>-r<run>`, **never deleted/recreated**; the `exp` channel always uses `--prerelease`; public publishing requires the approved `release` environment; assets = AK3 zip (contains GPL LICENSE + PROVENANCE + SOURCE-OFFER), `SHA256SUMS.txt`, `PROVENANCE.txt`, `SOURCE-OFFER.txt`, `SIGNING.txt`, repo source snapshot
 - Deterministic build: `KBUILD_BUILD_USER/HOST` pinned; `KBUILD_BUILD_TIMESTAMP` **dynamic** from the `rom_build_date` input (synced to the ROM's `ro.build.date` — fixes Duck Detector build-time drift, see the error table)
 
 ### Package AnyKernel3 — AK3 source
@@ -103,7 +116,7 @@ CONFIG_KALLSYMS=y / CONFIG_KALLSYMS_ALL=y
 
 ## Output ZIP (artifact per flavor)
 ```
-Peridot-Kernel-ACK-KSUNext-5dfc3359-SUSFS-v2.3.0-droidspaces-YYYYMMDD.zip       (ack-full; guidix-full REMOVED 2026-09-13)
+Peridot-Kernel-ACK-SukiSU-builtin-1cfa573-SUSFS-v2.3.0-droidspaces-YYYYMMDD.zip   (ack-full; guidix-full REMOVED 2026-09-13)
 ```
 
 ## Toolchain
@@ -139,7 +152,7 @@ Peridot-Kernel-ACK-KSUNext-5dfc3359-SUSFS-v2.3.0-droidspaces-YYYYMMDD.zip       
 | ZIP lands at the root of the `releases/` branch | Fix: zip goes into the `${RELEASEDATE}/` subfolder |
 | ZIPNAME `full` flavor not informative | Fix: `Peridot-Kernel-KSUNext-{VER}-SUSFS-{VER}-droidspaces-{DATE}.zip` |
 | KSU-Next `next` branch does not include SUSFS hooks | Switch to `pershoot/KernelSU-Next` branch `dev-susfs` — hooks built in, `10_enable_susfs_for_ksu.patch` not needed |
-| `fatal: Remote branch theettam-2.7 not found` | Implement a **Dynamic Branch Fallback Loop** (`17` → `main` → `theettam-2.8` → `theettam-2.7`) for defconfig cloning |
+| `fatal: Remote branch theettam-2.7 not found` | **Historical**: a *Dynamic Branch Fallback Loop* was used (`17` → `main` → …). **Removed 2026-11-07**: the defconfig is pinned to a commit + sha256; branch/tag HEAD is rejected |
 | **Package AnyKernel3 fails with `exit code 3` in both jobs** | **Root cause**: `git clone https://github.com/osm0sis/AnyKernel3` dies on the runner (log: "Cloning into 'anykernel'..." then immediate exit 3, no fatal message — consistent across all runs; other clones in the same run succeed). **Fix**: switch the source to the **private fork** `ZxAlif-ID/Kernel_F6` branch `main` (sparse clone of the `anykernel/` folder only) |
 | `anykernel.sh` contains a literal `${FLAVOR}` | Heredoc `<< 'EOF'` → `<< EOF` so `${FLAVOR}` expands |
 | `print` missing in ak3-core.sh | Replace `print "..."` → `ui_print "..."` (only `ui_print` is defined) |
@@ -226,7 +239,7 @@ If another base is worth trying later, add it as a new matrix flavor and verify 
 
 ## Key References
 - Droidspaces config guide: `ravindu644/Droidspaces-OSS/blob/main/Documentation/Kernel-Configuration.md`
-- KernelSU Next setup: `curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/${KERNELSU_COMMIT}/kernel/setup.sh" | bash -s $KERNELSU_COMMIT` (pin `5dfc3359e1cf2f4d953c74205c8d06e6eaadbec0` — SUSFS hooks built in); SUSFS: `patches/susfs/` vendored (susfs4ksu `05f2019`, v2.3.0 + `50_add` rebased vs ACK `0c3d559`, `git apply --check` then apply, fail-hard)
+- SukiSU setup (2026-11-07+): download `kernel/setup.sh` to a file → verify sha256 (`0ea8369c…`) → run it with the **full pinned commit** `1cfa57340590971cba7521ed536da8ebbedc5f0a` → verify `git rev-parse HEAD`; **no `curl | bash`**. SUSFS: `patches/susfs/` vendored (susfs4ksu `05f2019`, v2.3.0 + `50_add` exactly rebased onto ACK `0c3d559`, `git apply --check` then apply, **no fuzz**).
 - SUSFS branch for kernel 6.1: `gki-android14-6.1` on `gitlab.com/simonpunk/susfs4ksu`
 - Antman (Neutron glibc patcher): `github.com/Neutron-Toolchains/antman`
 - MiCode peridot source: `github.com/MiCode/Xiaomi_Kernel_OpenSource` branch `peridot-u-oss`

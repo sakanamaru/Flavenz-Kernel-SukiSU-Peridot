@@ -8,8 +8,9 @@ on:
         required: false
         default: "https://github.com/Mohithash/kernel_xiaomi_sm8635/releases/download/v2.8/Theettam-2.8-KSUN3.3.0-SUSFS2.3.0-DroidSpaces-peridot-6.1.176-android14-11-ga3b9c44908dd-ab13320413.zip"
 
+# Read-only: this workflow only downloads/compares, it never publishes.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   compare:
@@ -18,8 +19,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REF_URL: ${{ inputs.reference_url }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Download the three zips
         run: |

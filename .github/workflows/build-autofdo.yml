@@ -3,7 +3,12 @@ name: Build Kernel - AutoFDO (Tahap 2, artifact-only)
 # Tahap 2 roadmap (kernel-riset.md §3): build ack-full + plumbing AutoFDO
 # (backport upstream 315ad8780a via patches/0001-kbuild-Add-AutoFDO-*.patch).
 #
-# Mode ini TIDAK publish release — vehicle uji pipeline AutoFDO:
+# LEGACY build vehicle for the AutoFDO pipeline. Its prerelease job is now
+# OFF by default (input publish_prerelease=false), creates a DRAFT with a
+# unique tag, and NEVER deletes/recreates tags. The official peridot kernel
+# release path is build-droidspaces.yml.
+#
+# Mode ini TIDAK publish release otomatis - vehicle uji pipeline AutoFDO:
 #   - Tanpa profil (default): CONFIG_AUTOFDO_CLANG=y tanpa CLANG_AUTOFDO_PROFILE
 #     -> hanya dwarf berubah, nol dampak runtime (docs upstream autofdo.rst).
 #   - Dengan profil (input profile_url): make CLANG_AUTOFDO_PROFILE=<kernel.afdo>
@@ -23,23 +28,45 @@ on:
         description: "URL raw perf.data ';'-joined (anchor_kallsyms;seg1;seg2;...) untuk job convert-profile. Kosong = skip konversi."
         required: false
         default: ""
+      publish_prerelease:
+        description: "Publish the AutoFDO zip as a prerelease (true) or leave it as a DRAFT release (false, default)."
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
       rom_build_date:
-        description: "ro.build.date ROM yang terpasang (sama seperti workflow utama)"
+        description: "OPTIONAL (legacy workflow). Kosong = build timestamp = source commit date (honest). Isi hanya jika ingin sinkron ROM, dan itu akan didisclose di provenance/notes."
         required: false
-        default: "2026-07-01"
+        default: ""
 
 permissions:
   contents: read
 
 env:
   ARCH: arm64
-  KERNEL_COMMIT: 0c3d559bcd85
+  KERNEL_COMMIT: 0c3d559bcd85c64dae9c9c9687abbe5347fff3ad
   # KSU dev-susfs HEAD 2026-10-17 — sync dengan build-droidspaces.yml
   # Bumped dari 66fe35ec → f8ab5e81: upstream pershoot amend commit dev-susfs
   KERNELSU_VERSION: f8ab5e81
   KERNELSU_COMMIT: f8ab5e817f9f6149c55d601438e6975b6f9d488a
   # Label = versi nyata pin susfs4ksu (built-in kernel patch, bukan LKM).
   SUSFS_VERSION: v2.3.0
+  # --- pinned inputs (same values as configs/pins.env; legacy workflow) ---
+  DEFCONFIG_REPO_URL: https://github.com/Mohithash/kernel_xiaomi_sm8635.git
+  DEFCONFIG_COMMIT: 690024ef343deb44b03fa8e83dea5d5312c27795
+  DEFCONFIG_GKI_SHA256: 0d141b73f3f900bb62486caf75b3962d8c3a20d91a83308c87b52914f66395f0
+  DEFCONFIG_VENDOR_SHA256: eff4b3bbb1f07ac097b523442e2c7cfc5d4cef64ac4b499838427f8984ddb7c6
+  DEFCONFIG_EXRAWARN_SHA256: 33cf065fd1bb5a2880772f8ae0175fdad952e512d2992b649efb88f970f9b94b
+  NEUTRON_CLANG_URL: https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst
+  NEUTRON_CLANG_SHA256: b473a420d693a4e3bc71b56ec4283c0e3738f87d6ac37fa202bb0be5e0a07521
+  NEUTRON_ANTMAN_URL: https://raw.githubusercontent.com/Neutron-Toolchains/antman/0b32c45e3ad83a953b4bc3fd2feb4ad3cc87c1e8/antman
+  NEUTRON_ANTMAN_SHA256: deef2dcf11568403c712432ecb7678ef62c3244054ccfee8510ef94a8a8fb04d
+  DROIDSPACES_PATCH_URL: https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/cea978d58037568e7cba26c0c201b1de08f4b210/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
+  DROIDSPACES_PATCH_SHA256: 47fc945b2d73d9737d56c0f1c3a74cda0a95c30f9dc1b1abe546fa48940c4460
+  KERNELSU_SETUP_URL: https://raw.githubusercontent.com/pershoot/KernelSU-Next/f8ab5e817f9f6149c55d601438e6975b6f9d488a/kernel/setup.sh
+  KERNELSU_SETUP_SHA256: bc4f9618deedded6b663d79b5eb72b85fd1e0a125b101201353d7bdbf581aae7
   # Image baseline proven = run #16 (38975335661, release Flavenz-20261016, commit eabd4b3d).
   # SHA zip: ba6d19cde2ef4d6611a5db697ec899ed80159873e537d0d10b8d00ea6674b106
   # SHA Image dalam zip: diisi setelah plumbing-only run berhasil (baseline check opsional
@@ -62,28 +89,37 @@ jobs:
           sudo docker image prune --all --force || true
           df -h
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - name: Compute ROM-synced build timestamp
+      - name: Compute build timestamp (honest; ROM sync only if explicit)
         env:
-          ROM_BUILD_DATE: ${{ github.event.inputs.rom_build_date }}
+          ROM_BUILD_DATE_INPUT: ${{ github.event.inputs.rom_build_date }}
         run: |
           set -euo pipefail
-          IN=$(printf '%s' "${ROM_BUILD_DATE}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-          if [ -z "${IN}" ]; then
-            echo "::error::rom_build_date kosong"; exit 1
-          fi
-          TS=""
-          if printf '%s' "${IN}" | grep -qE '^[0-9]{9,11}$'; then
-            TS=$(date -u -d "@${IN}" '+%a %b %e %H:%M:%S UTC %Y')
-          elif TS=$(date -u -d "${IN}" '+%a %b %e %H:%M:%S UTC %Y' 2>/dev/null); then
-            :
+          IN=$(printf '%s' "${ROM_BUILD_DATE_INPUT:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          if [ -n "$IN" ]; then
+            if printf '%s' "$IN" | grep -qE '^[0-9]{9,11}$'; then
+              TS=$(date -u -d "@${IN}" '+%a %b %e %H:%M:%S UTC %Y') \
+                || { echo "::error::rom_build_date epoch invalid: '$IN'"; exit 1; }
+            else
+              TS=$(date -u -d "${IN}" '+%a %b %e %H:%M:%S UTC %Y' 2>/dev/null) \
+                || { echo "::error::rom_build_date cannot be parsed: '$IN'"; exit 1; }
+            fi
+            TIMESTAMP_SOURCE="rom_synced_explicit"
+            echo "::warning::legacy AutoFDO build: KBUILD_BUILD_TIMESTAMP explicitly synced to operator ROM date ($IN); disclosed."
           else
-            echo "::error::rom_build_date tidak bisa diparse: '${IN}'"; exit 1
+            SRC_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+            TS=$(date -u -d "@${SRC_EPOCH}" '+%a %b %e %H:%M:%S UTC %Y')
+            TIMESTAMP_SOURCE="source_commit_date"
           fi
-          echo "KBUILD_BUILD_TIMESTAMP=${TS}" >> "$GITHUB_ENV"
-          echo "Kernel build timestamp: ${TS}"
+          {
+            echo "KBUILD_BUILD_TIMESTAMP=${TS}"
+            echo "BUILD_TIMESTAMP_SOURCE=${TIMESTAMP_SOURCE}"
+          } >> "$GITHUB_ENV"
+          echo "Build timestamp: ${TS} (source: ${TIMESTAMP_SOURCE})"
 
       - name: Install dependencies
         run: |
@@ -95,13 +131,15 @@ jobs:
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu
 
-      - name: Setup Neutron Clang
+      - name: Setup Neutron Clang (sha256-pinned)
         run: |
           set -euo pipefail
           rm -rf "$HOME/clang"; mkdir -p "$HOME/clang"; cd "$HOME/clang"
-          curl -fsSLO "https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/30062026/neutron-clang-30062026.tar.zst"
-          tar -I zstd -xf "neutron-clang-30062026.tar.zst" && rm -f "neutron-clang-30062026.tar.zst"
-          curl -fsSLo antman "https://raw.githubusercontent.com/Neutron-Toolchains/antman/0b32c45e3ad83a953b4bc3fd2feb4ad3cc87c1e8/antman"
+          curl -fsSL --retry 3 --retry-delay 10 -o neutron-clang-30062026.tar.zst "$NEUTRON_CLANG_URL"
+          printf '%s  %s\n' "$NEUTRON_CLANG_SHA256" neutron-clang-30062026.tar.zst | sha256sum -c -
+          tar -I zstd -xf neutron-clang-30062026.tar.zst && rm -f neutron-clang-30062026.tar.zst
+          curl -fsSL --retry 3 --retry-delay 10 -o antman "$NEUTRON_ANTMAN_URL"
+          printf '%s  antman\n' "$NEUTRON_ANTMAN_SHA256" | sha256sum -c -
           chmod +x antman
           for i in 1 2 3 4; do
             ./antman --patch=glibc && break
@@ -140,21 +178,26 @@ jobs:
           done
           [ "$CO_OK" = true ] || { echo "::error::ACK checkout failed after 3 attempts"; exit 1; }
           cd ..
-          echo "Cloning peridot-defconfig..."
-          CLONED=false
-          for branch in 17 main theettam-2.8 theettam-2.7; do
-            echo "Trying branch: $branch"
-            if git clone --depth=1 -b "$branch" https://github.com/Mohithash/kernel_xiaomi_sm8635 peridot-defconfig 2>/dev/null; then
-              echo "Successfully cloned using branch: $branch"
-              CLONED=true
-              break
-            fi
-            rm -rf peridot-defconfig
+          echo "Fetching pinned peridot-defconfig (commit ${DEFCONFIG_COMMIT})..."
+          rm -rf peridot-defconfig
+          mkdir peridot-defconfig
+          cd peridot-defconfig
+          git init -q
+          git remote add origin "$DEFCONFIG_REPO_URL"
+          DEF_OK=false
+          for i in 1 2 3; do
+            echo "defconfig fetch attempt $i/3"
+            if git fetch --depth=1 origin "$DEFCONFIG_COMMIT"; then DEF_OK=true; break; fi
+            [ "$i" = 3 ] || sleep $((i * 20))
           done
-          if [ "$CLONED" = false ]; then
-            echo "::error::Failed to clone peridot-defconfig from any candidate branch!"
-            exit 1
-          fi
+          [ "$DEF_OK" = true ] || { echo "::error::defconfig fetch by pinned SHA failed"; exit 1; }
+          git -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$DEFCONFIG_COMMIT" \
+            || { echo "::error::defconfig HEAD $(git rev-parse HEAD) != $DEFCONFIG_COMMIT"; exit 1; }
+          printf '%s  %s\n' "$DEFCONFIG_GKI_SHA256" arch/arm64/configs/gki_defconfig | sha256sum -c -
+          printf '%s  %s\n' "$DEFCONFIG_VENDOR_SHA256" arch/arm64/configs/vendor/peridot_GKI.config | sha256sum -c -
+          printf '%s  %s\n' "$DEFCONFIG_EXRAWARN_SHA256" scripts/Makefile.extrawarn | sha256sum -c -
+          cd ..
           mkdir -p kernel/arch/arm64/configs/vendor
           cp peridot-defconfig/arch/arm64/configs/gki_defconfig \
             kernel/arch/arm64/configs/gki_defconfig
@@ -164,6 +207,7 @@ jobs:
             kernel/scripts/Makefile.extrawarn
           echo 'KBUILD_CFLAGS += $(call cc-disable-warning, uninitialized-const-pointer)' \
             >> kernel/scripts/Makefile.extrawarn
+
           rm -rf peridot-defconfig
 
       - name: Apply Droidspaces & Container Configs
@@ -205,30 +249,27 @@ jobs:
           echo "AUTOFDO_CONFIG_FILE=${CONFIG_FILE}" >> "$GITHUB_ENV"
           cd ..
 
-      - name: Apply kABI SYSVIPC patch (GKI 6.1)
+      - name: Apply kABI SYSVIPC patch (pinned commit + sha256, exact apply)
         run: |
-          wget -q "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch" \
-            -O sysvipc_kabi.patch
-          cd kernel
-          git apply ../sysvipc_kabi.patch || echo "kABI patch applied with notes"
-          cd ..
-          rm sysvipc_kabi.patch
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 10 -o droidspaces_kabi.patch "$DROIDSPACES_PATCH_URL"
+          printf '%s  droidspaces_kabi.patch\n' "$DROIDSPACES_PATCH_SHA256" | sha256sum -c -
+          ( cd kernel && git apply --check "$GITHUB_WORKSPACE/droidspaces_kabi.patch" )
+          ( cd kernel && git apply "$GITHUB_WORKSPACE/droidspaces_kabi.patch" )
+          rm -f droidspaces_kabi.patch
 
-      - name: Setup KernelSU Next (pershoot/dev-susfs, pin commit)
+      - name: Setup KernelSU Next (pinned commit, setup.sh downloaded + sha256-verified)
         run: |
-          cd kernel
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/${KERNELSU_COMMIT}/kernel/setup.sh" \
-            | bash -s $KERNELSU_COMMIT
-          cd KernelSU-Next
-          git fetch origin dev-susfs
-          if git checkout "$KERNELSU_COMMIT" 2>/dev/null; then
-            echo "Checked out pinned commit: $KERNELSU_COMMIT"
-          else
-            echo "Pinned commit not found, falling back to origin/dev-susfs HEAD"
-            git checkout origin/dev-susfs
-          fi
-          cd ..
-          grep -q "config KSU_SUSFS" drivers/kernelsu/Kconfig || { echo "::error::KernelSU-Next missing SUSFS config"; exit 1; }
+          set -euo pipefail
+          SETUP="$RUNNER_TEMP/ksun-setup.sh"
+          curl -fsSL --retry 3 --retry-delay 10 -o "$SETUP" "$KERNELSU_SETUP_URL"
+          printf '%s  %s\n' "$KERNELSU_SETUP_SHA256" "$SETUP" | sha256sum -c -
+          ( cd kernel && bash "$SETUP" "$KERNELSU_COMMIT" )
+          test -d kernel/KernelSU-Next || { echo "::error::KernelSU-Next clone failed"; exit 1; }
+          test "$(git -C kernel/KernelSU-Next rev-parse HEAD)" = "$KERNELSU_COMMIT" \
+            || { echo "::error::KernelSU-Next HEAD mismatch (no floating dev-susfs fallback)"; exit 1; }
+          grep -q "config KSU_SUSFS" kernel/drivers/kernelsu/Kconfig \
+            || { echo "::error::KernelSU-Next missing SUSFS config"; exit 1; }
 
       - name: Setup SUSFS (vendored pin 05f2019, rebased ACK 0c3d559)
         run: |
@@ -437,7 +478,11 @@ jobs:
           ls -lh
           ZIP=$(ls Peridot-Kernel-ACK-AutoFDO-*-droidspaces-*.zip | head -n1)
           DATE=$(echo "${ZIP}" | grep -oE '[0-9]{8}' | tail -n1)
-          TAG="Flavenz-${DATE}-afdo"
+          TAG="Flavenz-${DATE}-afdo-${KERNELSU_VERSION}-r${GITHUB_RUN_NUMBER}"
+          if gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            echo "::error::release/tag ${TAG} already exists; refusing to delete/recreate it"
+            exit 1
+          fi
           sha256sum "${ZIP}" > SHA256SUMS.txt
           if [ -n "${PROFILE_URL}" ]; then
             MODE="AutoFDO final — profil device terpasang (CLANG_AUTOFDO_PROFILE)"
@@ -451,7 +496,7 @@ jobs:
             echo ""
             echo "- Base: ACK android14-6.1 @ \`0c3d559bcd85\` + defconfig Mohithash + KSU Next \`${KERNELSU_VERSION}\` + SUSFS \`${SUSFS_VERSION}\` + Droidspaces"
             echo "- AutoFDO: backport upstream \`315ad8780a\` (P1 plumbing)"
-            echo "- Banner uname tetap pola proven \`6.1.138-android14-11\` (anti-deteksi utuh)"
+            echo "- LEGACY: banner uname may still carry the old vendor-localversion; this workflow is NOT the official release path (build-droidspaces.yml enforces an honest -flavenz- LOCALVERSION)."
             echo ""
             echo "### Peringatan (WAJIB dibaca)"
             echo "> COMPILE-VERIFIED != BOOT-TESTED. Zip ini belum tentu pernah di-boot."
@@ -463,14 +508,12 @@ jobs:
             echo ""
             echo "CI run: ${RUN_URL}"
           } > body.md
-          if gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
-            echo "Release ${TAG} sudah ada — hapus dulu (idempotent)"
-            gh release delete "${TAG}" -R "${GITHUB_REPOSITORY}" --yes --cleanup-tag
+          # Never delete/recreate tags or releases from CI.
+          RELEASE_FLAGS=(-R "${GITHUB_REPOSITORY}" --prerelease --target "${GITHUB_SHA}")
+          if [ "${{ github.event.inputs.publish_prerelease }}" != "true" ]; then
+            RELEASE_FLAGS+=(--draft)
           fi
-          gh release create "${TAG}" \
-            -R "${GITHUB_REPOSITORY}" \
-            --prerelease \
-            --target "${GITHUB_SHA}" \
+          gh release create "${TAG}" "${RELEASE_FLAGS[@]}" \
             --title "Flavenz Kernel Peridot AutoFDO — ${TAG}" \
             --notes-file body.md \
             "${ZIP}" SHA256SUMS.txt

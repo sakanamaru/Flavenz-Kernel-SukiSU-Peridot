@@ -37,8 +37,10 @@ jobs:
       # di workflow ini (error log: kasus inputs.flavor). Pola sama dipakai di sini.
       SELFTEST: ${{ github.event.inputs.selftest }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repository (no persisted credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup gh CLI auth
         env:
