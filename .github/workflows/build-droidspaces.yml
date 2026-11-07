@@ -177,7 +177,7 @@ jobs:
           BUILD_DATE=$(date -u +%Y%m%d)
           REPO_SHORT=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)
           ACK_SHORT=$(printf '%s' "$ACK_COMMIT" | cut -c1-12)
-          LOCALVERSION="-flavenz-${BUILD_DATE}-${FLAVOR}-g${ACK_SHORT}-${REPO_SHORT}"
+          KERNEL_LOCALVERSION="-flv-${BUILD_DATE}-${FLAVOR}-g${ACK_SHORT}-${REPO_SHORT}"
           RELEASE_TAG="Flavenz-${BUILD_DATE}-${FLAVOR}-${REPO_SHORT}-g${ACK_SHORT}-r${GITHUB_RUN_NUMBER}"
 
           IN=$(printf '%s' "${ROM_BUILD_DATE_INPUT:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
@@ -201,7 +201,7 @@ jobs:
             echo "BUILD_DATE=${BUILD_DATE}"
             echo "REPO_SHORT=${REPO_SHORT}"
             echo "ACK_SHORT=${ACK_SHORT}"
-            echo "LOCALVERSION=${LOCALVERSION}"
+            echo "KERNEL_LOCALVERSION=${KERNEL_LOCALVERSION}"
             echo "RELEASE_TAG=${RELEASE_TAG}"
             echo "KBUILD_BUILD_TIMESTAMP=${TS}"
             echo "BUILD_TIMESTAMP_SOURCE=${TIMESTAMP_SOURCE}"
@@ -213,13 +213,13 @@ jobs:
             echo "flavor=${FLAVOR}"
             echo "release_tag=${RELEASE_TAG}"
             echo "build_date=${BUILD_DATE}"
-            echo "localversion=${LOCALVERSION}"
+            echo "localversion=${KERNEL_LOCALVERSION}"
             echo "repo_short=${REPO_SHORT}"
             echo "ack_short=${ACK_SHORT}"
             echo "boot_test_status=${BOOT_TEST_INPUT}"
           } >> "$GITHUB_OUTPUT"
 
-          echo "LOCALVERSION=${LOCALVERSION}"
+          echo "KERNEL_LOCALVERSION=${KERNEL_LOCALVERSION}"
           echo "RELEASE_TAG=${RELEASE_TAG}"
           echo "KBUILD_BUILD_TIMESTAMP=${TS} (source: ${TIMESTAMP_SOURCE})"
 
@@ -487,16 +487,16 @@ jobs:
             sed -i -E '/^CONFIG_UNAME_OVERRIDE(=|_TARGET=|_STRING=)/d' "$f"
           done
           {
-            printf 'CONFIG_LOCALVERSION="%s"\n' "$LOCALVERSION"
+            printf 'CONFIG_LOCALVERSION="%s"\n' "$KERNEL_LOCALVERSION"
             printf 'CONFIG_LOCALVERSION_AUTO=n\n'
             printf '# CONFIG_UNAME_OVERRIDE is not set\n'
           } >> "$CFG"
-          grep -Fq "CONFIG_LOCALVERSION=\"$LOCALVERSION\"" "$CFG"
+          grep -Fq "CONFIG_LOCALVERSION=\"$KERNEL_LOCALVERSION\"" "$CFG"
           grep -q '^CONFIG_LOCALVERSION_AUTO=n' "$CFG"
           if git grep -nE 'CONFIG_UNAME_OVERRIDE(=|_TARGET=|_STRING=)' -- 'arch/arm64/configs'; then
             echo "::error::CONFIG_UNAME_OVERRIDE spoof still present in defconfigs"; exit 1
           fi
-          echo "Honest LOCALVERSION enforced: ${LOCALVERSION} (LOCALVERSION_AUTO=n, UNAME_OVERRIDE disabled)"
+          echo "Honest LOCALVERSION enforced: ${KERNEL_LOCALVERSION} (LOCALVERSION_AUTO=n, UNAME_OVERRIDE disabled)"
 
       - name: Include SUSFS header for new builtin APIs
         run: |
@@ -562,8 +562,8 @@ jobs:
           fi
 
           # --- version-honesty gates (new) -----------------------------------
-          grep -Fq "CONFIG_LOCALVERSION=\"$LOCALVERSION\"" out/.config \
-            || { echo "::error::CONFIG_LOCALVERSION not '$LOCALVERSION' in out/.config"; exit 1; }
+          grep -Fq "CONFIG_LOCALVERSION=\"$KERNEL_LOCALVERSION\"" out/.config \
+            || { echo "::error::CONFIG_LOCALVERSION not '$KERNEL_LOCALVERSION' in out/.config"; exit 1; }
           if grep -q '^CONFIG_LOCALVERSION_AUTO=y' out/.config; then
             echo "::error::CONFIG_LOCALVERSION_AUTO=y; version would be git-derived/unstable"; exit 1
           fi
@@ -571,12 +571,12 @@ jobs:
             echo "::error::CONFIG_UNAME_OVERRIDE present in out/.config (spoofed uname is not allowed)"; exit 1
           fi
           KERNEL_RELEASE=$(cat out/include/config/kernel.release)
-          test "$KERNEL_RELEASE" = "${EXPECTED_KERNEL_SUBLEVEL}${LOCALVERSION}" \
-            || { echo "::error::kernel.release '$KERNEL_RELEASE' != '${EXPECTED_KERNEL_SUBLEVEL}${LOCALVERSION}'"; exit 1; }
+          test "$KERNEL_RELEASE" = "${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}" \
+            || { echo "::error::kernel.release '$KERNEL_RELEASE' != '${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}'"; exit 1; }
           IMAGE=out/arch/arm64/boot/Image
           IMAGE_BANNER=$(strings "$IMAGE" | grep -m1 '^Linux version ' || true)
           [ -n "$IMAGE_BANNER" ] || { echo "::error::no 'Linux version' banner in Image"; exit 1; }
-          printf '%s' "$IMAGE_BANNER" | grep -Fq "${EXPECTED_KERNEL_SUBLEVEL}${LOCALVERSION}" \
+          printf '%s' "$IMAGE_BANNER" | grep -Fq "${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}" \
             || { echo "::error::Image banner does not carry honest LOCALVERSION: ${IMAGE_BANNER}"; exit 1; }
           printf '%s' "$IMAGE_BANNER" | grep -Fq "${KBUILD_BUILD_TIMESTAMP}" \
             || { echo "::error::Image banner does not carry KBUILD_BUILD_TIMESTAMP '${KBUILD_BUILD_TIMESTAMP}'"; exit 1; }
@@ -629,7 +629,7 @@ jobs:
             echo "flavor: ${FLAVOR}"
             echo "release_channel: ${RELEASE_CHANNEL}"
             echo "boot_test_status: ${BOOT_TEST_STATUS}"
-            echo "localversion: ${LOCALVERSION}"
+            echo "localversion: ${KERNEL_LOCALVERSION}"
             echo "kernel_release: ${KERNEL_RELEASE}"
             echo "image_banner: ${IMAGE_BANNER}"
             echo "image_sha256: ${IMAGE_SHA256}"
