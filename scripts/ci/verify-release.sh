@@ -93,7 +93,8 @@ printf '%s' "$REPO_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || fail "provenance repo_
 printf '%s' "$PROV_IMAGE_SHA" | grep -Eq '^[0-9a-f]{64}$' || fail "provenance image_sha256 is not a sha256"
 case "$KERNEL_RELEASE" in
   *"${LOCALVERSION}") : ;;
-  *) fail "kernel_release '$KERNEL_RELEASE' does not end with localversion '$LOCALVERSION'" ;;
+    *"${LOCALVERSION}+") : ;;  # dirty build tree adds '+'
+  *) fail "kernel_release '$KERNEL_RELEASE' does not end with localversion '$LOCALVERSION[+]'" ;;
 esac
 
 # --- zip contents + provenance/Image consistency (python zipfile) -----------
