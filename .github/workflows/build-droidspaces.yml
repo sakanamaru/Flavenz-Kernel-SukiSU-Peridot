@@ -571,13 +571,18 @@ jobs:
             echo "::error::CONFIG_UNAME_OVERRIDE present in out/.config (spoofed uname is not allowed)"; exit 1
           fi
           KERNEL_RELEASE=$(cat out/include/config/kernel.release)
-          test "$KERNEL_RELEASE" = "${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}" \
-            || { echo "::error::kernel.release '$KERNEL_RELEASE' != '${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}'"; exit 1; }
+          # A dirty build tree makes scripts/setlocalversion append '+'; accept
+          # it but never accept an arbitrary different suffix.
+          if [ "$KERNEL_RELEASE" != "${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}" ] \
+             && [ "$KERNEL_RELEASE" != "${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}+" ]; then
+            echo "::error::kernel.release '$KERNEL_RELEASE' != '${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}[+]'"; exit 1
+          fi
           IMAGE=out/arch/arm64/boot/Image
           IMAGE_BANNER=$(strings "$IMAGE" | grep -m1 '^Linux version ' || true)
           [ -n "$IMAGE_BANNER" ] || { echo "::error::no 'Linux version' banner in Image"; exit 1; }
-          printf '%s' "$IMAGE_BANNER" | grep -Fq "${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}" \
-            || { echo "::error::Image banner does not carry honest LOCALVERSION: ${IMAGE_BANNER}"; exit 1; }
+          if ! printf '%s' "$IMAGE_BANNER" | grep -Fq "${EXPECTED_KERNEL_SUBLEVEL}${KERNEL_LOCALVERSION}"; then
+            echo "::error::Image banner does not carry honest LOCALVERSION: ${IMAGE_BANNER}"; exit 1
+          fi
           printf '%s' "$IMAGE_BANNER" | grep -Fq "${KBUILD_BUILD_TIMESTAMP}" \
             || { echo "::error::Image banner does not carry KBUILD_BUILD_TIMESTAMP '${KBUILD_BUILD_TIMESTAMP}'"; exit 1; }
           if strings "$IMAGE" | grep -Fq '6.1.118-android14-11-ga3b9c44908dd-ab13320413'; then
