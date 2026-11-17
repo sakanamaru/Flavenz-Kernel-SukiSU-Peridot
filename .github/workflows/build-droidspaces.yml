@@ -1,4 +1,4 @@
-name: Build Kernel - Peridot (SukiSU+SUSFS)
+name: Build Kernel - Peridot (SukiSU-Nova+SUSFS)
 
 # =============================================================================
 # SECURITY MODEL (2026-11-07 P0 release-engineering hardening)
@@ -407,7 +407,7 @@ jobs:
           [ -s kernel.afdo ] || { echo "::error::AutoFDO profile is empty"; exit 1; }
           ls -lh kernel.afdo
 
-      - name: Setup SukiSU-Ultra (pinned commit, setup.sh downloaded + sha256-verified)
+      - name: Setup SukiSU-Nova (pinned commit, setup.sh downloaded + sha256-verified)
         run: |
           set -euo pipefail
           SETUP="$RUNNER_TEMP/sukisu-setup.sh"
@@ -423,8 +423,8 @@ jobs:
             || { echo "::error::KernelSU worktree is dirty after setup"; git -C kernel/KernelSU status --porcelain; exit 1; }
           test -e kernel/drivers/kernelsu/Kconfig || { echo "::error::drivers/kernelsu/Kconfig missing"; exit 1; }
           grep -q "config KSU_SUSFS" kernel/drivers/kernelsu/Kconfig \
-            || { echo "::error::SukiSU SUSFS Kconfig missing (wrong commit?)"; exit 1; }
-          echo "SukiSU-Ultra builtin ready: ${SUKISU_COMMIT} (setup.sh sha256 ${SUKISU_SETUP_SHA256})"
+            || { echo "::error::SukiSU-Nova SUSFS Kconfig missing (wrong commit?)"; exit 1; }
+          echo "SukiSU-Nova builtin ready: ${SUKISU_COMMIT} (setup.sh sha256 ${SUKISU_SETUP_SHA256})"
 
       - name: Setup SUSFS v2.3.0 (vendored + sha256, exact apply, no fuzz)
         env:
@@ -690,7 +690,7 @@ jobs:
             echo "   - AutoFDO backport: ${AUTOFDO_PATCH} (sha256 ${AUTOFDO_PATCH_SHA256})"
             echo "   - Droidspaces kABI patch: ${DROIDSPACES_PATCH_URL}"
             echo "     (sha256 ${DROIDSPACES_PATCH_SHA256}, upstream commit ${DROIDSPACES_COMMIT})"
-            echo "3) SukiSU-Ultra (GPL-2.0): ${SUKISU_REPO_URL} at commit ${SUKISU_COMMIT}"
+            echo "3) SukiSU-Nova (GPL-2.0): ${SUKISU_REPO_URL} at commit ${SUKISU_COMMIT}"
             echo "   plus setup.sh (sha256 ${SUKISU_SETUP_SHA256})"
             echo "4) peridot defconfig (GPL-2.0): ${DEFCONFIG_REPO_URL} at commit ${DEFCONFIG_COMMIT}"
             echo "5) Build toolchain (LLVM/Clang, Apache-2.0 with LLVM exceptions):"
@@ -725,7 +725,7 @@ jobs:
         run: |
           set -euo pipefail
           DATE="${BUILD_DATE}"
-          ZIPNAME="Peridot-Kernel-ACK-SukiSU-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
+          ZIPNAME="Peridot-Kernel-ACK-SukiSU-Nova-${SUKISU_VERSION}-SUSFS-${SUSFS_VERSION}-droidspaces-${DATE}.zip"
           ZIPPATH="${GITHUB_WORKSPACE}/${ZIPNAME}"
 
           cd anykernel
@@ -1075,7 +1075,7 @@ jobs:
           | Repo commit | `@REPO_COMMIT@` |
           | Kernel base | ACK `android14-6.1-lts` @ `@ACK_COMMIT@` (`@ACK_DESCRIPTION@`) |
           | Defconfig | `Mohithash/kernel_xiaomi_sm8635` @ `@DEFCONFIG_COMMIT@` (sha256-pinned files) |
-          | Root | SukiSU-Ultra builtin `@SUKISU_COMMIT@` (`@SUKISU_VERSION@`), setup.sh sha256 `@SUKISU_SETUP_SHA256@` |
+          | Root | SukiSU-Nova builtin `@SUKISU_COMMIT@` (`@SUKISU_VERSION@`), setup.sh sha256 `@SUKISU_SETUP_SHA256@` |
           | Hiding | SUSFS `@SUSFS_VERSION@` (upstream `@SUSFS_UPSTREAM_COMMIT@`), exact-rebased patch sha256 `@SUSFS_PATCH_SHA256@` |
           | Toolchain | Neutron Clang 30062026, sha256 `@NEUTRON_SHA256@` (+ antman sha256 `@ANTMAN_SHA256@`) |
           | Droidspaces kABI patch | `@DROIDSPACES_COMMIT@`, sha256 `@DROIDSPACES_PATCH_SHA256@` |

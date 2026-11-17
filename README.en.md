@@ -1,15 +1,15 @@
-# SukiSU-Ultra + SUSFS Kernel for Redmi Turbo 3 / POCO F6 (peridot)
+# SukiSU-Nova + SUSFS Kernel for Redmi Turbo 3 / POCO F6 (peridot)
 
 <div align="center">
 
 [![Kernel](https://img.shields.io/badge/Kernel-6.1.138-blue.svg)](https://kernel.org)
-[![Root](https://img.shields.io/badge/Root-SukiSU--Ultra%20builtin-6f42c1.svg)](https://github.com/SukiSU-Ultra/SukiSU-Ultra)
+[![Root](https://img.shields.io/badge/Root-SukiSU--Nova%20builtin-6f42c1.svg)](https://github.com/SukiSU-Nova/SukiSU-Nova)
 [![SUSFS](https://img.shields.io/badge/SUSFS-v2.3.0-red.svg)](https://github.com/ShirkNeko/susfs4ksu)
 [![Device](https://img.shields.io/badge/Device-Redmi%20Turbo%203%20%2F%20POCO%20F6-orange.svg)](#)
 [![Android](https://img.shields.io/badge/Tested%20on-Android%2017%20ported%20ROM-green.svg)](#)
 [![Build](https://img.shields.io/badge/Build-GitHub%20Actions-2088ff.svg)](https://github.com/sakanamaru/Flavenz-Kernel-SukiSU-Peridot/actions)
 
-**A fork of [Flavenz-Kernel-Peridot](https://github.com/ZxAlif-ID/Flavenz-Kernel-Peridot): KernelSU Next replaced with SukiSU-Ultra builtin, keeping the ACK 6.1.138 base, peridot defconfig and SUSFS. Boot-tested on a ported OS4 (Android 17) ROM.**
+**A fork of [Flavenz-Kernel-Peridot](https://github.com/ZxAlif-ID/Flavenz-Kernel-Peridot): KernelSU Next replaced with SukiSU-Nova builtin, keeping the ACK 6.1.138 base, peridot defconfig and SUSFS. Boot-tested on a ported OS4 (Android 17) ROM.**
 
 **🌐 Language: [中文](README.md) | English**
 
@@ -25,7 +25,7 @@ A custom GKI kernel for the **Redmi Turbo 3 / POCO F6 (`peridot`, Snapdragon 8s 
 |---|---|
 | Kernel base | ACK `android14-6.1-lts` @ `0c3d559bcd85c64dae9c9c9687abbe5347fff3ad` = `6.1.138-android14-11` |
 | Device config | `Mohithash/kernel_xiaomi_sm8635`, branch `17` @ `690024ef343deb44b03fa8e83dea5d5312c27795` (3 files sha256-pinned; CI rejects branch HEAD) |
-| Root | **SukiSU-Ultra `builtin`** @ `1cfa57340590971cba7521ed536da8ebbedc5f0a` (2026-11-01), compiled into the kernel (GKI builtin mode) |
+| Root | **SukiSU-Nova `builtin`** @ `4bec532dd447e2852aa8932afa768255350c103a` (2026-11-16), compiled into the kernel (GKI builtin mode) |
 | Hiding | **SUSFS v2.3.0** (`ShirkNeko/susfs4ksu` @ `05f201978bdbd5d08f842e0a2a6e0f2ff0912787`, vendored and exactly rebased onto ACK `0c3d559`) |
 | Toolchain | Neutron Clang 30062026 (sha256-pinned), ThinLTO, GitHub Actions |
 | Extra | Flavenz's Droidspaces container-related kABI-safe configs (SYSVIPC / namespaces / MACVLAN / IPv6 NAT, etc.) |
@@ -34,7 +34,7 @@ A custom GKI kernel for the **Redmi Turbo 3 / POCO F6 (`peridot`, Snapdragon 8s 
 
 ### Differences from upstream Flavenz
 
-- KernelSU Next → **SukiSU-Ultra builtin** (use a SukiSU-family manager; the KSU Next manager is not compatible)
+- KernelSU Next → **SukiSU-Nova builtin** (use a SukiSU-family manager; the KSU Next manager is not compatible)
 - SUSFS patch switched to ShirkNeko's SukiSU-compatible patch set, plus SukiSU hide hooks ([`patches/sukisu/69_hide_stuff.patch`](patches/sukisu/69_hide_stuff.patch), exactly rebased onto ACK 0c3d559 + SUSFS; **fuzz is no longer accepted by CI**)
 - `-Werror` disabled for SukiSU builtin code (`-Wno-error`), otherwise Clang fails on `-Wimplicit-fallthrough`
 - KPM not enabled (KernelPatch-patched images failed to boot on this device)
@@ -54,8 +54,8 @@ A custom GKI kernel for the **Redmi Turbo 3 / POCO F6 (`peridot`, Snapdragon 8s 
 | Device | Redmi Turbo 3 `24069RA21C` (peridot) | Same peridot (single-device test) |
 | ROM | Ported OS4.0.25.0, Android 17 (SDK 37), `CP2A.260605.016`, fingerprint `Redmi/peridot/peridot:17/OS4.0.25.0.XEOCNXM`; vendor/ODM is an Android 14 base | Same |
 | Kernel | Old vendor LOCALVERSION banner (`6.1.138-android14-11-ga3b9c44908dd-ab13320413+`) | `6.1.138-flavenz-…` (honest LOCALVERSION; date/flavor/SHA vary per build) |
-| SukiSU | builtin `b16e899` | builtin `1cfa573` (2026-11-01) |
-| Manager | SukiSU-Ultra **v4.2.1-r2 (41095-6)** (verified with that older kernel) | The official SukiSU-Ultra manager matching kernel UAPI (6); the repo does not pin an APK version |
+| SukiSU | Ultra builtin `b16e899` (history) | Nova builtin `4bec532` (2026-11-16) |
+| Manager | SukiSU-Nova **v3.0.0** (must match kernel UAPI 6) | The official SukiSU-Nova manager matching kernel UAPI (6); the repo does not pin an APK version |
 | SUSFS | v2.3.0, `ksud susfs implementation = builtin`, `status = true` | v2.3.0 (same) |
 | Flashing | Local repack of stock boot.img → `fastboot boot` test → `fastboot flash boot`; `init_boot` kept stock | Same path (**not** recovery, see below) |
 | Hardware | root (`su`, `u:r:ksu`), modules, Zygisk Next/LSPosed, camera, Wi-Fi, charging, 5G | Boot/root/SUSFS/basic hardware spot check; no full regression |
@@ -221,8 +221,8 @@ One-time repository settings for the release operator:
 ## Credits
 
 - **Flavenz / ZxAlif-ID** — upstream kernel and GitHub Actions pipeline: <https://github.com/ZxAlif-ID/Flavenz-Kernel-Peridot>
-- **SukiSU-Ultra** — <https://github.com/SukiSU-Ultra/SukiSU-Ultra>
-- **ShirkNeko / simonpunk** — SUSFS patches and SukiSU integration: <https://github.com/ShirkNeko/susfs4ksu>, <https://github.com/SukiSU-Ultra/SukiSU_patch>
+- **SukiSU-Nova** — <https://github.com/SukiSU-Nova/SukiSU-Nova>
+- **ShirkNeko / simonpunk** — SUSFS patches and SukiSU integration: <https://github.com/ShirkNeko/susfs4ksu>, <https://github.com/SukiSU-Nova/SukiSU_patch>
 - **Mohithash** — peridot defconfig (`kernel_xiaomi_sm8635`)
 - **Google ACK / Qualcomm / Xiaomi MiCode** — kernel sources
 - **osm0sis / AnyKernel3** — flashing script

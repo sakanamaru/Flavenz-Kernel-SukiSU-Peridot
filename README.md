@@ -1,15 +1,15 @@
-# SukiSU-Ultra + SUSFS Kernel for Redmi Turbo 3 / POCO F6 (peridot)
+# SukiSU-Nova + SUSFS Kernel for Redmi Turbo 3 / POCO F6 (peridot)
 
 <div align="center">
 
 [![Kernel](https://img.shields.io/badge/Kernel-6.1.138-blue.svg)](https://kernel.org)
-[![Root](https://img.shields.io/badge/Root-SukiSU--Ultra%20builtin-6f42c1.svg)](https://github.com/SukiSU-Ultra/SukiSU-Ultra)
+[![Root](https://img.shields.io/badge/Root-SukiSU--Nova%20builtin-6f42c1.svg)](https://github.com/SukiSU-Nova/SukiSU-Nova)
 [![SUSFS](https://img.shields.io/badge/SUSFS-v2.3.0-red.svg)](https://github.com/ShirkNeko/susfs4ksu)
 [![Device](https://img.shields.io/badge/Device-Redmi%20Turbo%203%20%2F%20POCO%20F6-orange.svg)](#)
 [![Android](https://img.shields.io/badge/Tested%20on-Android%2017%20ported%20ROM-green.svg)](#)
 [![Build](https://img.shields.io/badge/Build-GitHub%20Actions-2088ff.svg)](https://github.com/sakanamaru/Flavenz-Kernel-SukiSU-Peridot/actions)
 
-**基于 [Flavenz-Kernel-Peridot](https://github.com/ZxAlif-ID/Flavenz-Kernel-Peridot) 改造：KernelSU Next → SukiSU-Ultra builtin，保留 ACK 6.1.138 / peridot defconfig / SUSFS；实测可在移植的 OS4（Android 17）上开机使用。**
+**基于 [Flavenz-Kernel-Peridot](https://github.com/ZxAlif-ID/Flavenz-Kernel-Peridot) 改造：KernelSU Next → SukiSU-Nova builtin，保留 ACK 6.1.138 / peridot defconfig / SUSFS；实测可在移植的 OS4（Android 17）上开机使用。**
 
 **🌐 语言: 中文 | [English](README.en.md)**
 
@@ -25,7 +25,7 @@
 |---|---|
 | 内核基线 | ACK `android14-6.1-lts` @ `0c3d559bcd85c64dae9c9c9687abbe5347fff3ad` = `6.1.138-android14-11` |
 | 设备配置 | `Mohithash/kernel_xiaomi_sm8635` 分支 `17` @ `690024ef343deb44b03fa8e83dea5d5312c27795`（3 个文件 sha256 固定，CI 拒绝分支 HEAD） |
-| Root | **SukiSU-Ultra `builtin` 分支** @ `1cfa57340590971cba7521ed536da8ebbedc5f0a`（2026-11-01），内核内置（GKI builtin 模式） |
+| Root | **SukiSU-Nova `builtin` 分支** @ `4bec532dd447e2852aa8932afa768255350c103a`（2026-11-16），内核内置（GKI builtin 模式） |
 | 隐藏 | **SUSFS v2.3.0**（`ShirkNeko/susfs4ksu` @ `05f201978bdbd5d08f842e0a2a6e0f2ff0912787`，vendored 并按 ACK `0c3d559` 精确 rebase） |
 | 编译 | Neutron Clang 30062026（sha256 固定）、ThinLTO、GitHub Actions |
 | 额外配置 | Flavenz 的 Droidspaces 容器 kABI-safe 配置（SYSVIPC / namespaces / MACVLAN / IPv6 NAT 等） |
@@ -34,7 +34,7 @@
 
 和上游 Flavenz 的差异：
 
-- KernelSU Next → **SukiSU-Ultra builtin**（管理器也要换成 SukiSU 系，KSU Next 管理器不兼容）
+- KernelSU Next → **SukiSU-Nova builtin**（管理器也要换成 SukiSU 系，KSU Next 管理器不兼容）
 - SUSFS 补丁换成 ShirkNeko 的 SukiSU 兼容版本，并额外加入 SukiSU hide hooks（[`patches/sukisu/69_hide_stuff.patch`](patches/sukisu/69_hide_stuff.patch)，已按 ACK 0c3d559+SUSFS 精确 rebase，**CI 不再允许 fuzz**）
 - 构建时对 SukiSU 代码关闭 `-Werror`（否则 Clang 会因 `-Wimplicit-fallthrough` 直接失败）
 - KPM 未启用（KernelPatch 在本机实测无法启动；SUSFS 不需要 KPM）
@@ -52,8 +52,8 @@
 | 设备 | Redmi Turbo 3 `24069RA21C`（peridot） | 同一台 peridot（单机验证） |
 | ROM | 移植 OS4.0.25.0，Android 17（SDK 37），`CP2A.260605.016`，指纹 `Redmi/peridot/peridot:17/OS4.0.25.0.XEOCNXM`；vendor/ODM 为 Android 14 旧底座 | 同上 |
 | 内核 | 旧版 vendor LOCALVERSION（`6.1.138-android14-11-ga3b9c44908dd-ab13320413+`） | `6.1.138-flavenz-…`（honest LOCALVERSION，随构建日期/flavor/SHA 变化） |
-| SukiSU | builtin `b16e899` | builtin `1cfa573`（2026-11-01） |
-| 管理器 | SukiSU-Ultra **v4.2.1-r2 (41095-6)**（与该旧内核配对验证） | 需与内核 UAPI（6）匹配的官方 SukiSU-Ultra 管理器；仓库不固定 APK 版本 |
+| SukiSU | Ultra builtin `b16e899`（历史） | Nova builtin `4bec532`（2026-11-16） |
+| 管理器 | SukiSU-Nova **v3.0.0**（需与内核 UAPI 6 匹配） | 需与内核 UAPI（6）匹配的官方 SukiSU-Nova 管理器；仓库不固定 APK 版本 |
 | SUSFS | v2.3.0，`ksud susfs implementation = builtin`、`status = true` | v2.3.0（同上） |
 | 刷入方式 | 本地 repack stock boot.img → `fastboot boot` 临时测试 → `fastboot flash boot` 持久化；`init_boot` 保持原厂 | 同路径（**不是** recovery，见下） |
 | 功能抽检 | root（`su`/`u:r:ksu`）、模块加载、Zygisk Next/LSPosed、相机、Wi-Fi、充电、5G 正常 | 开机/root/SUSFS/基础硬件抽检；未做全量回归 |
@@ -219,8 +219,8 @@ cat PROVENANCE.txt
 ## Credits
 
 - **Flavenz / ZxAlif-ID** — 上游内核与 GitHub Actions 构建流程：<https://github.com/ZxAlif-ID/Flavenz-Kernel-Peridot>
-- **SukiSU-Ultra** — <https://github.com/SukiSU-Ultra/SukiSU-Ultra>
-- **ShirkNeko / simonpunk** — SUSFS 补丁与 SukiSU 适配：<https://github.com/ShirkNeko/susfs4ksu>、<https://github.com/SukiSU-Ultra/SukiSU_patch>
+- **SukiSU-Nova** — <https://github.com/SukiSU-Nova/SukiSU-Nova>
+- **ShirkNeko / simonpunk** — SUSFS 补丁与 SukiSU 适配：<https://github.com/ShirkNeko/susfs4ksu>、<https://github.com/SukiSU-Nova/SukiSU_patch>
 - **Mohithash** — `kernel_xiaomi_sm8635` peridot defconfig
 - **Google ACK / Qualcomm / Xiaomi MiCode** — 内核源码
 - **osm0sis / AnyKernel3** — 刷写脚本
@@ -238,6 +238,6 @@ GPL-2.0（见 [LICENSE](LICENSE)）。内核源码版权归各上游项目所有
 
 ## English summary
 
-Custom GKI kernel for **Redmi Turbo 3 / POCO F6 (`peridot`)** based on ACK `android14-6.1-lts` @ `0c3d559bcd85` (6.1.138), with **SukiSU-Ultra builtin `1cfa573`** and **SUSFS v2.3.0** compiled in; KPM is not enabled. All build inputs are pinned (commit + sha256) in [`configs/pins.env`](configs/pins.env); patches apply exactly (no fuzz) and CI hard-gates an honest `-flavenz-…` kernel version. Releases are drafts by default, exp builds are always prereleases, tags are never deleted/recreated, and the release assets include GPL text, provenance and a source offer (UNSIGNED is stated explicitly unless a GPG key is configured).
+Custom GKI kernel for **Redmi Turbo 3 / POCO F6 (`peridot`)** based on ACK `android14-6.1-lts` @ `0c3d559bcd85` (6.1.138), with **SukiSU-Nova nova builtin `4bec532`** and **SUSFS v2.3.0** compiled in; KPM is not enabled. All build inputs are pinned (commit + sha256) in [`configs/pins.env`](configs/pins.env); patches apply exactly (no fuzz) and CI hard-gates an honest `-flavenz-…` kernel version. Releases are drafts by default, exp builds are always prereleases, tags are never deleted/recreated, and the release assets include GPL text, provenance and a source offer (UNSIGNED is stated explicitly unless a GPG key is configured).
 
 **Flashing reality check:** there is currently **no working TWRP/OrangeFox for the OS4 / Android 17 port**, so the AnyKernel3 zip cannot be flashed on this ROM right now. The supported path is backing up `boot`/`init_boot`/`vendor_boot` to a PC, repacking the `Image` into the stock `boot.img` and using fastboot. Repacked boot images are **unsigned and have no valid AVB footer**, so they only work on an unlocked bootloader with AVB/verity disabled; `fastboot boot` is a RAM-only test (some Xiaomi bootloaders reject it) and is **not** a rollback. Roll back with `fastboot flash boot_a/b <stock.img>`. See [README.en.md](README.en.md) for the full English documentation.
